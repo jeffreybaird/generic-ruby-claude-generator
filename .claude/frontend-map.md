@@ -1,23 +1,20 @@
 # Frontend Map
 
-> Template — fill in with your app's actual routes, controllers/handlers, views, Stimulus controllers, Turbo usage, and layouts. Replace every `<placeholder>` and the example rows.
+> Template — fill in with your app's actual routes, controllers, views, Stimulus controllers, Turbo usage, and layouts. Replace every `<placeholder>` and the example rows.
 
-> **Baseline:** Rails 8 (resourceful routes, Hotwire) / Sinatra 4 (Rack routes). Keep this map current — it's how Claude navigates the UI.
+> **Baseline:** Rails 8 (resourceful routes, Hotwire). Keep this map current — it's how Claude navigates the UI.
 
 Quick-reference for navigating `MyApp`'s frontend layer. It is the first stop for any
 developer — or Claude — orienting to the UI. When routes, views, Stimulus controllers, or
 Turbo frames change, update this file in the same commit.
 
-This template is **dual-framework**. Keep the section that matches your stack and delete
-the other, or keep both if `my_app` mounts a Sinatra app alongside Rails.
-
 ---
 
 ## Stack
 
-State which framework(s) this app uses so readers know which sections apply.
+State the frontend stack this app uses so readers know which sections apply.
 
-- **Framework:** Rails 8 / Sinatra 4 (pick one, or note how they coexist)
+- **Framework:** Rails 8
 - **Front-end:** Hotwire (Turbo + Stimulus) via importmap / jsbundling, or your bundler
 - **Templating:** ERB / ViewComponent / Slim / Haml (pick what `my_app` uses)
 - **CSS:** Tailwind / Propshaft + plain CSS / Sass (note which)
@@ -30,8 +27,6 @@ Document the nesting of your layouts and which controllers/actions render inside
 typical app has one application layout plus shells differentiated by audience (public,
 authenticated, admin).
 
-### Rails
-
 Layouts live in `app/views/layouts/`. Controllers select a layout via `layout "name"`.
 
 ```
@@ -42,18 +37,6 @@ application.html.erb                  ← HTML skeleton, meta tags, <%= yield %>
 │   └── Admin::* controllers          ← e.g. Admin::DashboardController, Admin::PostsController
 └── layouts/auth.html.erb             ← Minimal shell for auth flows
     └── Sessions / Registrations / Passwords controllers
-```
-
-### Sinatra
-
-Layouts live in `views/` (e.g. `views/layout.erb`); set per-route with
-`erb :template, layout: :name`, or app-wide with `set :erb, layout: :layout`.
-
-```
-views/layout.erb                      ← Base HTML skeleton, <%= yield %>
-├── views/layouts/public.erb          ← Public shell
-├── views/layouts/admin.erb           ← Admin shell
-└── views/layouts/auth.erb            ← Auth flow shell
 ```
 
 Replace these with your actual layout files. Add or remove branches to match your
@@ -68,16 +51,12 @@ behavior. Keep the "Notes" column to one phrase per route.
 
 > **Rails:** routes are defined in `config/routes.rb`. Use `bin/rails routes` to dump the
 > full table. See <https://guides.rubyonrails.org/routing.html>.
->
-> **Sinatra:** routes are HTTP-verb blocks (`get "/path" do ... end`) in your app class.
-> There is no central manifest — list them here as you add them. See
-> <https://sinatrarb.com/intro.html#routes>.
 
 ### Public Routes
 
 Accessible to unauthenticated visitors, or with optional auth.
 
-| Path & verb            | Rails controller#action / Sinatra handler   | Auth | Notes |
+| Path & verb            | Controller#action                            | Auth | Notes |
 |------------------------|----------------------------------------------|------|-------|
 | `GET /`                | `<HomeController#index>`                      | None | Landing page |
 | `GET /<resources>`     | `<ResourcesController#index>`                 | None | Browse/search |
@@ -85,17 +64,14 @@ Accessible to unauthenticated visitors, or with optional auth.
 | `GET /sign_up`         | `<RegistrationsController#new>`               | None | New user signup |
 | `GET /sign_in`         | `<SessionsController#new>`                    | None | Login form |
 
-_Example row — Rails public (delete when filled):_
+_Example row (delete when filled):_
 | `GET /posts`           | `PostsController#index`                       | None | Paginated public post list |
-
-_Example row — Sinatra public (delete when filled):_
-| `GET /posts`           | `MyApp::Web` block `get "/posts"`             | None | Renders `views/posts/index.erb` |
 
 ### Authenticated User Routes
 
 Require a logged-in user.
 
-| Path & verb                  | Controller#action / handler         | Notes |
+| Path & verb                  | Controller#action                   | Notes |
 |------------------------------|--------------------------------------|-------|
 | `GET /account`               | `<AccountsController#edit>`          | Profile, email, password |
 | `GET /<resources>/new`       | `<ResourcesController#new>`          | Create form |
@@ -108,7 +84,7 @@ _Example row (delete when filled):_
 
 ### Admin Routes (`/admin/*` — requires admin role)
 
-| Path & verb                       | Controller#action / handler          | Notes |
+| Path & verb                       | Controller#action                    | Notes |
 |-----------------------------------|---------------------------------------|-------|
 | `GET /admin`                      | `<Admin::DashboardController#index>`  | Platform overview, KPIs |
 | `GET /admin/<resources>`          | `<Admin::ResourcesController#index>`  | List + manage all |
@@ -118,12 +94,12 @@ _Example row (delete when filled):_
 | `GET /admin/users`                | `<Admin::UsersController#index>`      | User management |
 | `GET /admin/settings`             | `<Admin::SettingsController#edit>`    | App-wide config |
 
-_Example row — Rails admin (delete when filled):_
+_Example row (delete when filled):_
 | `GET /admin/posts`                | `Admin::PostsController#index`        | Manage all posts across users |
 
 ### Auth Routes
 
-| Path & verb            | Controller#action / handler           | Notes |
+| Path & verb            | Controller#action                     | Notes |
 |------------------------|----------------------------------------|-------|
 | `GET /sign_up`         | `<RegistrationsController#new>`        | New user signup |
 | `POST /sign_up`        | `<RegistrationsController#create>`     | Create account |
@@ -134,7 +110,7 @@ _Example row — Rails admin (delete when filled):_
 
 ### API / Non-HTML Routes
 
-| Path & verb              | Controller#action / handler          | Notes |
+| Path & verb              | Controller#action                    | Notes |
 |--------------------------|---------------------------------------|-------|
 | `POST /webhooks/<svc>`   | `<Webhooks::ServiceController#create>`| Inbound webhook receiver |
 | `GET /up`                | Rails health check (built-in)         | Liveness probe (`/up` ships with Rails 8) |
@@ -153,8 +129,6 @@ projects, list components instead of (or alongside) partials.
 > **Rails:** templates live in `app/views/<controller>/<action>.html.erb`; partials are
 > `_name.html.erb`; ViewComponents live in `app/components/`. See
 > <https://guides.rubyonrails.org/action_view_overview.html>.
->
-> **Sinatra:** templates live in `views/` and are rendered with `erb :name`.
 
 | Area / view             | File                                         | Purpose |
 |-------------------------|----------------------------------------------|---------|
@@ -245,8 +219,7 @@ Describe your styling approach so contributors know where styles live and how to
 - **Pipeline** — Propshaft (Rails 8 default) / Sprockets / cssbundling. Entry file location.
 - **Custom properties** — if you inject CSS custom properties for theming, document the
   prefix, where they are set, and what controls them.
-- **File locations** — `app/assets/stylesheets/application.css` (Rails) or `public/css/`
-  (Sinatra) for global styles.
+- **File locations** — `app/assets/stylesheets/application.css` for global styles.
 - **Conventions** — e.g. no hardcoded color values in templates; all colors via variables.
 
 _Example (delete when filled):_
@@ -264,9 +237,6 @@ Document how auth is enforced at the request layer.
 > **Rails:** typically `before_action` filters in `ApplicationController` and subclasses,
 > or a concern. See <https://guides.rubyonrails.org/action_controller_overview.html#filters>.
 > Rails 8 ships a built-in authentication generator (`bin/rails generate authentication`).
->
-> **Sinatra:** typically `before` filters and helper methods in the app class. See
-> <https://sinatrarb.com/intro.html#filters>.
 
 | Filter / before_action              | Applied to                  | Purpose |
 |--------------------------------------|-----------------------------|---------|
@@ -274,7 +244,7 @@ Document how auth is enforced at the request layer.
 | `<require_admin>`                    | `<Admin::* controllers>`    | 403 / redirect unless admin role |
 | `<set_current_user>`                 | `ApplicationController`     | Loads current user from session if present |
 
-_Example rows — Rails (delete when filled):_
+_Example rows (delete when filled):_
 | `before_action :require_authentication` | `AccountsController`     | Redirects unauthenticated users to `/sign_in` |
 | `before_action :require_admin`          | `Admin::BaseController`  | Checks `Current.user.admin?`; redirects otherwise |
 
@@ -283,8 +253,6 @@ _Example rows — Rails (delete when filled):_
 ## Where to Find Things
 
 Quick orientation index. Update paths to match your actual project structure.
-
-### Rails
 
 | What you are looking for         | Where to look |
 |----------------------------------|---------------|
@@ -299,17 +267,5 @@ Quick orientation index. Update paths to match your actual project structure.
 | Static assets                    | `app/assets/`, `public/` |
 | Business logic (models/services) | `app/models/`, `app/services/` |
 | System / integration tests       | `test/system/`, `test/integration/` (or `spec/`) |
-
-### Sinatra
-
-| What you are looking for         | Where to look |
-|----------------------------------|---------------|
-| Route definitions                | Your app class (e.g. `app.rb` / `lib/my_app/web.rb`) |
-| Templates                        | `views/` |
-| Layouts                          | `views/layout.erb`, `views/layouts/` |
-| Public/static assets             | `public/` |
-| JS / CSS                         | `public/js/`, `public/css/` |
-| Business logic                   | `lib/my_app/` |
-| Tests                            | `spec/` or `test/` |
 </content>
 </invoke>

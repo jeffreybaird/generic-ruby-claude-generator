@@ -3,11 +3,19 @@
 Load this file when working on Stimulus controllers, Turbo Frames/Streams, third-party JS
 widget integration, or any client-side JavaScript in a Hotwire app.
 
-> **Baseline:** Hotwire (Turbo + Stimulus) on Rails 8 via importmap (default) or jsbundling; Stimulus standalone on Sinatra. Turbo first; Stimulus for client behavior; no business logic in controllers.
+> **Baseline:** Hotwire (Turbo + Stimulus) on Rails 8 via importmap (default) or jsbundling. Turbo first; Stimulus for client behavior; no business logic in controllers.
 
 This is the Ruby/Hotwire analog of the Elixir template's LiveView JS hooks doc. The
-principle is identical: **client-side code is a thin DOM/JS bridge — never a place for
-business logic.** Decisions, data shaping, and authorization live on the server.
+guiding idea: in a Hotwire app, **client-side code stays a thin DOM/JS bridge — not a
+home for business logic.** Decisions, data shaping, and authorization belong on the
+server. (Authorization and trust boundaries stay server-side in *any* architecture,
+SPA included — that part isn't Hotwire-specific.)
+
+> **Scope.** This doc assumes the app has chosen Hotwire, which is this template's
+> default. An SPA (React/Vue/Svelte against a JSON or GraphQL API) is a legitimate
+> alternative when a UI genuinely needs rich client-side state; the conventions below
+> are about getting the most out of Hotwire once you've picked it, not an argument that
+> Hotwire is the only right answer.
 
 ### Maturity tags
 
@@ -18,7 +26,6 @@ Each feature/section is tagged so you know how safe it is to lean on:
 | `[stable]`      | Core Hotwire/Stimulus API, framework-agnostic, unlikely to change       |
 | `[rails-default]` | Ships out of the box in a new Rails 8 app (importmap + Hotwire)       |
 | `[rails-alt]`   | Supported Rails path, but not the default (jsbundling/esbuild, TS)      |
-| `[sinatra]`     | Requires manual wiring — Sinatra has no first-party Hotwire integration |
 
 ---
 
@@ -88,7 +95,7 @@ export default class extends Controller {
 ```
 
 ```erb
-<%# app/views/posts/show.html.erb (Rails) — markup wires everything declaratively %>
+<%# app/views/posts/show.html.erb — markup wires everything declaratively %>
 <div data-controller="clipboard"
      data-clipboard-success-text-value="Copied!"
      data-clipboard-copied-class="is-copied">
@@ -246,10 +253,13 @@ export default class extends Controller {
 }
 ```
 
-**Only** reach for raw `fetch`/`XMLHttpRequest` for **direct-to-third-party** calls that must
-not pass through `MyApp` — e.g. a presigned **direct upload to S3** or to a media provider's
-ingest endpoint. Never hand-roll `fetch` to your own backend to dodge Turbo; that re-creates
-the business-logic-in-the-client antipattern from §3.
+The clearest case for raw `fetch`/`XMLHttpRequest` is a **direct-to-third-party** call that
+must not pass through `MyApp` — e.g. a presigned **direct upload to S3** or to a media
+provider's ingest endpoint. In a Hotwire app, prefer Turbo-driven forms over hand-rolling
+`fetch` to your own backend: a controller that fetches JSON and builds DOM by hand pulls
+rendering and logic back into the client (§3), which is the thing Hotwire is trying to avoid.
+(If you've chosen an SPA, this calculus is different — there, fetching from your API *is* the
+pattern.)
 
 ```javascript
 // ✅ acceptable exception — presigned upload straight to the storage vendor
@@ -263,7 +273,7 @@ own server directly, but prefer Turbo-driven forms.)
 
 ---
 
-## 7. Registration `[rails-default]` / `[rails-alt]` / `[sinatra]`
+## 7. Registration `[rails-default]` / `[rails-alt]`
 
 ### Rails 8 — importmap (default) `[rails-default]`
 
@@ -306,58 +316,18 @@ import ClipboardController from "./clipboard_controller"
 application.register("clipboard", ClipboardController)
 ```
 
-### Sinatra 4 — Stimulus standalone `[sinatra]`
-
-Sinatra has **no first-party Hotwire integration** — there is no `stimulus:install`, no
-`importmap.rb`. Wire it manually one of two ways
-([Stimulus: Installing](https://stimulus.hotwired.dev/handbook/installing)):
-
-**A. Small bundle (esbuild) — recommended for real apps.** Add `@hotwired/stimulus` (and
-optionally `@hotwired/turbo`) to `package.json`, register controllers explicitly, and serve
-the bundle from `public/`:
-
-```javascript
-// frontend/application.js  → esbuild → public/assets/application.js
-import { Application } from "@hotwired/stimulus"
-import ClipboardController from "./controllers/clipboard_controller"
-
-window.Stimulus = Application.start()
-Stimulus.register("clipboard", ClipboardController)
-```
-
-**B. No build step — ESM via CDN/importmap-in-HTML.** Fine for prototypes; you still
-`register()` each controller manually:
-
-```html
-<%# Sinatra view (ERB/Haml) — no Node toolchain %>
-<script type="module">
-  import { Application, Controller } from "https://unpkg.com/@hotwired/stimulus/dist/stimulus.js"
-  window.Stimulus = Application.start()
-  Stimulus.register("hello", class extends Controller {
-    static targets = ["name"]
-    connect() {}
-  })
-</script>
-```
-
-"importmap without the Rails gem" means a native `<script type="importmap">` in your layout
-pointing at the Stimulus ESM build, plus the `Application.start()` / `register(...)` calls
-above — you own the registration that `stimulus-loading` would otherwise automate on Rails.
-
 | Setup                          | Discovery / registration                                   | Tag              |
 |--------------------------------|------------------------------------------------------------|------------------|
 | Rails importmap (default)      | `pin_all_from` + `eagerLoadControllersFrom` (auto)         | `[rails-default]`|
 | Rails jsbundling/esbuild       | generated `index.js` with `application.register(...)`      | `[rails-alt]`    |
-| Sinatra esbuild bundle         | manual `Application.start()` + `register(...)`             | `[sinatra]`      |
-| Sinatra CDN/ESM, no build      | inline `<script type="module">` + manual `register(...)`   | `[sinatra]`      |
 
 ---
 
-## 8. TypeScript (optional) `[rails-alt]` / `[sinatra]`
+## 8. TypeScript (optional) `[rails-alt]`
 
 TypeScript controllers require a bundler — they are **not** available on the importmap
 default (importmap serves JS as-is, no transpile). Use them only with jsbundling/esbuild on
-Rails, or with the esbuild Sinatra setup.
+Rails.
 
 - Author controllers as `*_controller.ts`; esbuild strips types and bundles.
 - esbuild does **not** type-check — run `tsc --noEmit` as a **separate CI step**.

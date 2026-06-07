@@ -8,18 +8,12 @@ users.
 We don't need to handle that load today. We need to make decisions today that
 don't prevent us from handling it later.
 
-> **Baseline:** Ruby 3.3+ · Rails 8.0 (Hotwire, Solid Queue/Cache/Cable, Kamal 2) · Sinatra 4 (Rack, Puma) · PostgreSQL. Domain logic in service objects; request context via Current attributes.
+> **Baseline:** Ruby 3.3+ · Rails 8.0 (Hotwire, Solid Queue/Cache/Cable, Kamal 2) · PostgreSQL. Domain logic in service objects; request context via Current attributes.
 
 **Maturity tags** used below: `[Rails 8 default]` ships in a stock Rails 8 app ·
 `[Stable]` mature, widely-run gem · `[Optional]` reach for it only when you
 outgrow the default. Gem pins are **loose** (`~> X.Y`) — track the latest
 compatible release.
-
-**Dual-framework convention.** Each section splits **Rails** / **Sinatra** only
-where they differ. Be honest about the asymmetry: Rails 8 ships batteries
-(Solid Queue/Cache/Cable); Sinatra ships Rack and nothing else. Several tools
-are framework-agnostic Rack/Redis libraries (Sidekiq, Rack::Attack, redis) and
-work identically under both — noted where they appear.
 
 ---
 
@@ -40,7 +34,7 @@ in controllers/routes. The current actor and tenant boundary travel via
 not thread-globals or method-threaded `scope` args.
 
 ```ruby
-# Rails — app/models/current.rb
+# app/models/current.rb
 class Current < ActiveSupport::CurrentAttributes
   attribute :user, :account
 end
@@ -50,9 +44,7 @@ Current.account = resolved_account
 Current.user    = authenticated_user
 ```
 
-Sinatra has no `CurrentAttributes`; use a request-scoped store reset per request
-(`Thread.current` cleared in an `after` filter, or a Rack env key). Either way
-the **tenant boundary is explicit** and every tenant-scoped query filters on it
+The **tenant boundary is explicit** and every tenant-scoped query filters on it
 (see Tenant Isolation, below). Scoping is a *data boundary* (which rows a query
 may touch) — keep it distinct from *authorization* (which actions a user may
 perform); gate actions with Pundit/Action Policy separately.
@@ -129,13 +121,10 @@ def record_view(resource)
 end
 ```
 
-**Flush job.** Schedule the drain on a short interval.
-
-- **Rails:** a recurring `[Rails 8 default]` Solid Queue job
-  (`config/recurring.yml`) calls `MyApp::Buffers::AnalyticsBuffer.flush` every
-  30s. Or `ActiveJob` on Sidekiq with the sidekiq-scheduler gem.
-- **Sinatra:** a Sidekiq worker enqueued by sidekiq-cron, or a Clockwork/cron
-  process invoking `flush`.
+**Flush job.** Schedule the drain on a short interval. A recurring
+`[Rails 8 default]` Solid Queue job (`config/recurring.yml`) calls
+`MyApp::Buffers::AnalyticsBuffer.flush` every 30s. Or `ActiveJob` on Sidekiq
+with the sidekiq-scheduler gem.
 
 **Counters:** never `UPDATE counters SET n = n + 1` per event (row-lock
 contention). `INCR` in Redis; reconcile periodically.
@@ -158,7 +147,7 @@ Structure service objects and scopes so **reads can route to a replica** and
 transactional consistency requires it. This makes replica routing a config
 change, not a rewrite.
 
-### Rails — multi-database
+### Multi-database
 
 Rails ships first-class multi-DB ([Rails multi-db guide](https://guides.rubyonrails.org/active_record_multiple_databases.html)):
 
@@ -196,12 +185,6 @@ Rails can also switch automatically via
 (reads → replica, writes → primary, recent writers pinned to primary). Until you
 add a replica, point `reading` at the primary — zero code change later.
 
-### Sinatra
-
-No connection-switching middleware. Define **two connections** (writer + reader)
-with separate `establish_connection` / Sequel connection objects and call the
-reader explicitly in read methods. Same discipline: pure reads vs. pure writes.
-
 > Don't implement replicas today. Just keep reads and writes in separate methods
 > so adding one is routing, not rework.
 
@@ -221,8 +204,7 @@ Every query in the end-user hot path must be backed by an index.
 - **Composite tenant indexes lead with `account_id`** — it's in every `WHERE`.
 - **Verify with `EXPLAIN ANALYZE`** in dev for each new hot-path query. Treat a
   sequential scan on any table >1000 rows as a bug.
-- Rails: `add_index :posts, [:account_id, :created_at]`. Sinatra (AR/Sequel
-  migrations): same composite index.
+- `add_index :posts, [:account_id, :created_at]`.
 
 ```sql
 EXPLAIN ANALYZE SELECT * FROM posts
@@ -234,11 +216,13 @@ WHERE account_id = 42 ORDER BY created_at DESC LIMIT 25;
 
 ## 4. Minimize Heavy Client Connections
 
-Prefer **server-rendered HTML with minimal JS** over a SPA. Each persistent
-realtime socket holds server resources per user; spend them only where realtime
-is genuinely required.
+This template defaults to **server-rendered HTML with minimal JS**, and that's the
+cheaper path at scale: each persistent realtime socket holds server resources per
+user, so spend them only where realtime is genuinely required. An SPA is a fair
+choice when the UI needs rich client state — the cost to watch for either way is
+*unnecessary* persistent connections, not the rendering style itself.
 
-### Rails — Hotwire first
+### Hotwire first
 
 | Need | Tool | Persistent socket? |
 |---|---|---|
@@ -250,21 +234,19 @@ Reserve Action Cable / Turbo Stream subscriptions for genuinely realtime views
 (live feed, presence). Static browse/detail/search pages render plain HTML +
 Stimulus — no socket.
 
-### Both frameworks — keep payloads lean, kill N+1
+### Keep payloads lean, kill N+1
 
 ```ruby
 # ❌ N+1 — one query per post for its author
 Post.where(account_id: Current.account.id).each { |p| p.author.name }
 
-# ✅ eager-load with includes (Rails / AR under Sinatra)
+# ✅ eager-load with includes
 Post.where(account_id: Current.account.id).includes(:author).limit(25)
 ```
 
 - Never load entire association trees for a list view. Select only the columns
   you render (`select(:id, :title, :slug)`).
 - Paginate every list (kaminari/pagy). Never render an unbounded collection.
-- Sinatra: serve HTML (ERB/Slim) + a sprinkle of JS; use SSE for the rare
-  realtime widget rather than standing up a full socket stack.
 
 ---
 
@@ -274,7 +256,7 @@ Data read on every page load but written only on an admin edit must be cached.
 
 | Cache | Examples | Strategy |
 |---|---|---|
-| **Cache** | tenant resolution (slug→account), theme/branding, layout config, catalog metadata, feature flags, entitlement status | `Rails.cache.fetch` with TTL + event invalidation |
+| **Cache** | tenant resolution (slug→account), theme/branding, layout config, catalog metadata, feature flags, entitlement status | `Rails.cache.fetch` with TTL + invalidation on write |
 | **Never cache** | per-user progress/position, analytics (write-only), audit logs (write-only), live connection counts | — |
 
 ### Backend decision table
@@ -287,11 +269,9 @@ Data read on every page load but written only on an admin edit must be cached.
 
 Configure once (`config.cache_store = :solid_cache_store` / `:redis_cache_store`);
 callers use the same `Rails.cache` API ([caching guide](https://guides.rubyonrails.org/caching_with_rails.html)).
-Sinatra: use the `redis` gem directly or `ActiveSupport::Cache::RedisCacheStore`
-standalone — same fetch-with-fallback pattern.
 
 ```ruby
-# read-through cache; event invalidation is primary, TTL is the backstop
+# read-through cache; invalidation on write is primary, TTL is the backstop
 def account_theme
   Rails.cache.fetch("theme:#{Current.account.id}", expires_in: 5.minutes) do
     Theme.find_by(account_id: Current.account.id)
@@ -312,15 +292,19 @@ auto-expire when a child changes ([caching guide](https://guides.rubyonrails.org
 <% end %>
 ```
 
-### Invalidate via events, not inline
+### Invalidate on write
 
-A mutation publishes an event; a subscriber invalidates the key. A new cache to
-bust is a new subscriber, not an edit to the mutating service object.
+The code that mutates the data busts its cache key, right after the change commits —
+in the service, or in an `after_commit` callback on the model so it can't be missed.
 
 ```ruby
-# subscriber reacting to a domain event (ActiveSupport::Notifications or your bus)
-ActiveSupport::Notifications.subscribe("theme.updated") do |*, payload|
-  Rails.cache.delete("theme:#{payload[:account_id]}")
+# in the service that updates the theme, after the write commits:
+account.update!(theme_attrs)
+Rails.cache.delete("theme:#{account.id}")
+
+# or, so no call site can forget it:
+class Theme < ApplicationRecord
+  after_commit { Rails.cache.delete("theme:#{account_id}") }
 end
 ```
 
@@ -388,9 +372,8 @@ end
 > - **Sidekiq** stores jobs in **Redis**, which is **not** in the AR transaction.
 >   Enqueuing inside the transaction is the classic race: a worker can pick up
 >   the job before the row commits, or the job gets enqueued even on rollback.
->   With Sidekiq (Rails **or** Sinatra), enqueue from an **`after_commit`
->   callback** or via a **transactional outbox row** — never inside the
->   transaction.
+>   With Sidekiq, enqueue from an **`after_commit` callback** or via a
+>   **transactional outbox row** — never inside the transaction.
 
 | Consumer | Lossy OK? | How |
 |---|---|---|
@@ -414,10 +397,6 @@ Scope channels to the narrowest useful audience. Prefer hierarchical names.
 account their `Current` boundary grants. Never interpolate user-controlled
 strings into `stream_from` without an authorization check.
 
-**Sinatra:** no Action Cable. Use **SSE** for one-way server→client pushes, or
-**Redis pub/sub** (`redis.subscribe`) across processes. Same topic-scoping and
-at-most-once rules apply — durable effects still go through Sidekiq.
-
 ---
 
 ## 7. Background Jobs: Separate by Criticality
@@ -425,7 +404,7 @@ at-most-once rules apply — durable effects still go through Sidekiq.
 ### Queue hierarchy
 
 ```yaml
-# Rails — config/queue.yml (Solid Queue) or Sidekiq config
+# config/queue.yml (Solid Queue) or Sidekiq config
 production:
   dispatchers: [...]
   workers:
@@ -459,12 +438,9 @@ end
 | Backend | When | Maturity |
 |---|---|---|
 | **Solid Queue** | Rails 8 default; DB-backed, no Redis needed; recurring jobs built in | `[Rails 8 default]` ([solid_queue](https://github.com/rails/solid_queue)) |
-| **Sidekiq** | High throughput, Redis-backed, mature ecosystem; **works under Sinatra too** | `[Stable]` ([sidekiq](https://github.com/sidekiq/sidekiq)) |
+| **Sidekiq** | High throughput, Redis-backed, mature ecosystem | `[Stable]` ([sidekiq](https://github.com/sidekiq/sidekiq)) |
 
-- **Rails:** ActiveJob over Solid Queue (default) or Sidekiq — adapter swap, jobs
-  unchanged.
-- **Sinatra:** Sidekiq directly (`include Sidekiq::Job`); same `critical`/
-  `default`/`bulk` queues, same tenant-tagging rule.
+ActiveJob over Solid Queue (default) or Sidekiq — adapter swap, jobs unchanged.
 
 ### At scale
 
@@ -479,14 +455,14 @@ interface stays the same; only queue config changes.
 
 A misbehaving tenant, bot, or attack on one actor must not degrade others.
 
-### Rack::Attack — the canonical gem (both frameworks)
+### Rack::Attack — the canonical gem
 
 [Rack::Attack](https://github.com/rack/rack-attack) `~> 6.7` `[Stable]` is Rack
-middleware → works identically under **Rails and Sinatra**. Throttle by IP,
-account, or endpoint; return `429` with `Retry-After`.
+middleware. Throttle by IP, account, or endpoint; return `429` with
+`Retry-After`.
 
 ```ruby
-# config/initializers/rack_attack.rb (Rails) or use Rack::Attack (Sinatra)
+# config/initializers/rack_attack.rb
 class Rack::Attack
   throttle("req/ip", limit: 200, period: 60) { |req| req.ip }
 
@@ -524,8 +500,7 @@ end
 ```
 
 Use it for simple endpoint guards; reach for Rack::Attack when you need
-cross-endpoint rules, blocklists, or fail2ban-style logic. (Sinatra has no
-`rate_limit` — use Rack::Attack.)
+cross-endpoint rules, blocklists, or fail2ban-style logic.
 
 ### Suggested starting limits (generous)
 
@@ -570,14 +545,14 @@ shared scope helper (e.g. `for_current_account`) makes the boundary hard to omit
 ## Checklist for New Features
 
 - [ ] Service objects own domain logic; controllers/routes stay thin
-- [ ] Tenant boundary read from `Current` (Rails) / request store (Sinatra), not globals
+- [ ] Tenant boundary read from `Current`, not globals
 - [ ] High-frequency writes go through a buffer or Redis counter, not row-by-row inserts
 - [ ] Bulk inserts use `activerecord-import`, not a loop of `create!`
 - [ ] Reads and writes are in separate methods (replica-routable later)
 - [ ] Every hot-path query has a composite `[account_id, …]` index, verified with `EXPLAIN ANALYZE`
 - [ ] List views eager-load (`includes`) and paginate — no N+1, no unbounded loads
 - [ ] Public pages render server HTML + minimal JS; sockets reserved for realtime
-- [ ] Frequently-read/rarely-written data goes through `Rails.cache` with event invalidation
+- [ ] Frequently-read/rarely-written data goes through `Rails.cache` with invalidation on write
 - [ ] Cache keys are account-namespaced
 - [ ] Broadcasts carry only lossy-OK UI/cache events; business-critical effects enqueue a job inside the write's transaction
 - [ ] Channels/topics are narrowly scoped and authorized in `subscribed`

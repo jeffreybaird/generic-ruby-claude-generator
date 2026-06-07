@@ -6,7 +6,7 @@
 
 Load this file when working on any feature that touches tenant-scoped data.
 
-Baseline: Ruby 3.3+ · **Rails 8** / **Sinatra 4**. Tenant model = `Account` (FK column `account_id`). Scoping lives in models/services, never controllers/routes (see `separation-of-concerns.md`). Errors are dry-monads `Success`/`Failure([:tag])`; authorization is Pundit.
+Baseline: Ruby 3.3+ · **Rails 8**. Tenant model = `Account` (FK column `account_id`). Scoping lives in models/services, never controllers/routes (see `separation-of-concerns.md`). Errors are dry-monads `Success`/`Failure([:tag])`; authorization is Pundit.
 
 ---
 
@@ -89,7 +89,7 @@ The resolved tenant is carried for the duration of the request in a request-loca
 **once** after resolution and **reset** at request end. Models/services read
 `Current.account` rather than receiving it from controllers.
 
-### Rails — `ActiveSupport::CurrentAttributes`
+### `ActiveSupport::CurrentAttributes`
 
 ```ruby
 # app/models/current.rb
@@ -100,24 +100,6 @@ end
 
 Rails resets `Current` automatically between requests **via the executor** — no manual
 reset needed in a normal Rails request/job ([CurrentAttributes](https://api.rubyonrails.org/classes/ActiveSupport/CurrentAttributes.html)).
-
-### Sinatra — per-request context + mandatory reset
-
-You can reuse `ActiveSupport::CurrentAttributes` in Sinatra, but there is **no Rails
-executor**, so it does **not** auto-reset. On a reused thread, `Current.account` leaks
-into the next request unless you reset it.
-
-```ruby
-# ✅ CORRECT — Sinatra: set in before, RESET in after (every path, incl. errors)
-class MyApp < Sinatra::Base
-  before { Current.account = resolve_account! }
-  after  { Current.reset }   # without this, the tenant leaks across requests
-end
-```
-
-> **Gotcha:** Forgetting `Current.reset` in Sinatra is a silent cross-tenant data
-> leak. If you cannot guarantee the `after` filter runs on every code path, wrap the
-> request in `ActiveSupport::Executor.wrap { ... }` (Rack middleware) instead.
 
 ---
 
@@ -172,19 +154,13 @@ end
 ### Setting the current tenant
 
 ```ruby
-# Rails — controller macro (resolves by subdomain, sets the tenant per request)
+# controller macro (resolves by subdomain, sets the tenant per request)
 class ApplicationController < ActionController::Base
   set_current_tenant_by_subdomain(:account, :subdomain)
   # or, resolve it yourself:
   #   set_current_tenant_through_filter
   #   before_action { set_current_tenant(resolve_account!) }
 end
-```
-
-```ruby
-# Sinatra — no controller macros; set the tenant manually in a before filter
-before { ActsAsTenant.current_tenant = resolve_account! }
-after  { ActsAsTenant.current_tenant = nil }   # reset, same reasoning as Current.reset
 ```
 
 ### Strict mode + the escape hatch
@@ -240,11 +216,8 @@ Apartment::Tenant.create(account.subdomain)   # provision a new tenant's schema
 ### Tenant resolution via elevator middleware
 
 ```ruby
-# Rails — config/application.rb
+# config/application.rb
 config.middleware.use Apartment::Elevators::Subdomain   # or ::Domain, ::Generic
-
-# Sinatra — mount the Rack elevator directly
-use Apartment::Elevators::Subdomain
 ```
 
 ### Decision table
@@ -287,7 +260,7 @@ hand-rolled tenant `default_scope`.**
 Resolve the tenant from the request, set `Current.account` (or 404), in this order:
 custom domain → subdomain → 404.
 
-### Rails — `before_action` + `request.subdomain`
+### `before_action` + `request.subdomain`
 
 ```ruby
 class ApplicationController < ActionController::Base
@@ -309,25 +282,8 @@ end
 `request.subdomain` / `request.host` come from Action Dispatch
 ([Action Controller Overview](https://guides.rubyonrails.org/action_controller_overview.html)).
 
-### Sinatra — `before` filter (or Rack middleware) parsing `request.host`
-
-```ruby
-class MyApp < Sinatra::Base
-  before do
-    subdomain = request.host.split(".").first
-    account =
-      Account.find_by(custom_domain: request.host) ||
-      Account.find_by(subdomain: subdomain)
-
-    halt 404 unless account
-    Current.account = account
-  end
-  after { Current.reset }
-end
-```
-
-LiveView-style on-mount hooks have no equivalent — the request-level `before`/`before_action`
-is the single resolution point. Individual controllers/routes never re-resolve the tenant.
+The request-level `before_action` is the single resolution point. Individual
+controllers never re-resolve the tenant.
 
 ---
 

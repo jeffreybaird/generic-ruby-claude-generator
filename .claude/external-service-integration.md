@@ -23,8 +23,7 @@ All calls to a given external service go through **one** class. No controller,
 route, model, service object, or job may call the vendor SDK / raw HTTP directly.
 
 ```ruby
-# app/clients/my_app/media/client.rb (Rails)
-# lib/my_app/media/client.rb         (Sinatra)
+# app/clients/my_app/media/client.rb
 module MyApp
   module Media
     class Client
@@ -86,7 +85,7 @@ For a process-wide swap (e.g. a fake in `test`), resolve from a config point
 instead of a literal:
 
 ```ruby
-# config/initializers/clients.rb (Rails) — or a plain config module (Sinatra)
+# config/initializers/clients.rb
 MyApp.config.media_client = ENV["RAILS_ENV"] == "test" ? MyApp::Media::FakeClient : MyApp::Media::Client
 ```
 
@@ -251,7 +250,7 @@ set is fixed and identical across providers:
 JSON round-tripping reorders keys and re-serializes — the HMAC will no longer
 match. You must verify over the exact bytes the provider signed.
 
-**Rails** — read `request.raw_post`. Skip CSRF and avoid letting param parsing
+Read `request.raw_post`. Skip CSRF and avoid letting param parsing
 consume the body first.
 
 ```ruby
@@ -278,26 +277,6 @@ class WebhooksController < ActionController::Base
 end
 ```
 
-**Sinatra** — `request.body.read` gives the raw body; enqueue with Sidekiq.
-
-```ruby
-post "/webhooks/media" do
-  payload   = request.body.read                    # raw bytes
-  signature = request.env["HTTP_X_PROVIDER_SIGNATURE"]
-
-  halt 400 unless MyApp::Media::Client.valid_signature?(payload, signature)
-
-  event = JSON.parse(payload)
-  MyApp::Media::WebhookJob.perform_async(
-    "provider_event_id" => event["id"],
-    "account_id"        => event.dig("data", "account_id"),
-    "event_type"        => event["type"],
-    "payload"           => event
-  )
-  status 200
-end
-```
-
 HMAC verification helper (constant-time compare):
 
 ```ruby
@@ -309,10 +288,9 @@ end
 
 ### Async processing via a background job
 
-| Framework | Job runner | Enqueue | Read raw body |
-|---|---|---|---|
-| **Rails 8** | ActiveJob on Solid Queue (default) | `perform_later` | `request.raw_post` |
-| **Sinatra** | Sidekiq `~> 7` <span title="stable">`[stable]`</span> | `perform_async` | `request.body.read` |
+| Job runner | Enqueue | Read raw body |
+|---|---|---|
+| ActiveJob on Solid Queue (default) | `perform_later` | `request.raw_post` |
 
 The job is where the work happens — create/update records, emit events, dispatch
 side effects. The controller/route only verifies + enqueues.
@@ -321,8 +299,7 @@ side effects. The controller/route only verifies + enqueues.
 
 Providers redeliver the same webhook (retries, at-least-once delivery). Processing
 must be idempotent. **Do not rely on a "unique job key"** — ActiveJob/Solid Queue
-has no built-in job-level uniqueness, and even Sidekiq's enqueue-time dedup
-(`sidekiq-unique-jobs`) is best-effort. The portable, correct mechanism is a
+has no built-in job-level uniqueness. The portable, correct mechanism is a
 **data-layer guard**: a unique index on the provider event id, scoped by account.
 
 ```ruby
@@ -337,7 +314,7 @@ add_index :webhook_events, %i[provider_event_id account_id], unique: true
 ```
 
 ```ruby
-class MyApp::Media::WebhookJob < ApplicationJob   # Rails: ActiveJob
+class MyApp::Media::WebhookJob < ApplicationJob   # ActiveJob
   queue_as :webhooks
   retry_on Faraday::TimeoutError, wait: :polynomially_longer, attempts: 5
 
@@ -352,28 +329,8 @@ class MyApp::Media::WebhookJob < ApplicationJob   # Rails: ActiveJob
 end
 ```
 
-```ruby
-class MyApp::Media::WebhookJob              # Sinatra: Sidekiq
-  include Sidekiq::Job
-  sidekiq_options queue: "webhooks", retry: 5
-
-  def perform(args)
-    WebhookEvent.create!(
-      provider_event_id: args["provider_event_id"],
-      account_id:        args["account_id"],
-      event_type:        args["event_type"]
-    )
-    handle(args["event_type"], args["payload"])
-  rescue ActiveRecord::RecordNotUnique
-    # already processed
-  end
-end
-```
-
 The unique index does the deduplication regardless of how many times the job
-runs or how it was enqueued. `sidekiq-unique-jobs` can additionally suppress
-duplicate *enqueues* on Sinatra, but treat it as an optimization — the DB guard
-is the guarantee.
+runs or how it was enqueued — the DB guard is the guarantee.
 
 ### Generic webhook events
 
@@ -394,7 +351,7 @@ Provider credentials come from the environment, never from source.
 
 | Mechanism | When |
 |---|---|
-| **ENV** (`ENV.fetch("MEDIA_API_KEY")`) | Default. Works in Rails and Sinatra; pairs with `dotenv` in dev. |
+| **ENV** (`ENV.fetch("MEDIA_API_KEY")`) | Default. Pairs with `dotenv` in dev. |
 | **Rails encrypted credentials** (`Rails.application.credentials.media[:api_key]`) | Rails apps that prefer committed-but-encrypted config + a `RAILS_MASTER_KEY`. |
 
 ```ruby

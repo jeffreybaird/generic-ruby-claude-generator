@@ -6,10 +6,9 @@ every operation that matters to the business must be observable.
 
 > **Baseline:** Ruby 3.3+ · OpenTelemetry Ruby SDK + auto-instrumentation · ActiveSupport::Notifications · structured logging. Auto-instrument HTTP/DB/jobs; reserve manual spans for business logic.
 
-This template supports **Rails 8** and **Sinatra 4**. Where the idiom differs the
-section splits into **Rails** / **Sinatra**. Replace `MyApp` / `my_app` with your
-real app name. Maturity tags: **stable** (1.0+, safe to depend on) ·
-**pre-1.0** (0.x — pin the minor line, expect breaking changes).
+Replace `MyApp` / `my_app` with your real app name. Maturity tags: **stable**
+(1.0+, safe to depend on) · **pre-1.0** (0.x — pin the minor line, expect
+breaking changes).
 
 ---
 
@@ -36,7 +35,7 @@ real app name. Maturity tags: **stable** (1.0+, safe to depend on) ·
    every request and job — never interpolated into the message string.
 
 6. **Don't hand-roll spans around already-instrumented operations.** HTTP
-   (Rack/Rails/Sinatra), ActiveRecord/pg, Faraday, ActiveJob/Sidekiq, and Redis
+   (Rack/Rails), ActiveRecord, Faraday, ActiveJob/Sidekiq, and Redis
    are covered by auto-instrumentation. Manual spans are for multi-step business
    logic and external calls a gem does not wrap. **Don't double-wrap.**
 
@@ -66,11 +65,9 @@ gem "opentelemetry-exporter-otlp",  "~> 0.30"  # pre-1.0 — pin the minor line
 gem "opentelemetry-instrumentation-all", "~> 0.76"  # pre-1.0
 
 # …or specific instrumentation gems (smaller footprint, explicit):
-# gem "opentelemetry-instrumentation-rails",       "~> 0.36"  # Rails only
-# gem "opentelemetry-instrumentation-sinatra",     "~> 0.25"  # Sinatra only
-# gem "opentelemetry-instrumentation-rack",        "~> 0.26"  # both (HTTP layer)
-# gem "opentelemetry-instrumentation-active_record","~> 0.9"  # Rails only
-# gem "opentelemetry-instrumentation-pg",          "~> 0.30"  # raw pg / Sinatra
+# gem "opentelemetry-instrumentation-rails",       "~> 0.36"
+# gem "opentelemetry-instrumentation-rack",        "~> 0.26"  # HTTP layer
+# gem "opentelemetry-instrumentation-active_record","~> 0.9"
 # gem "opentelemetry-instrumentation-faraday",     "~> 0.27"
 # gem "opentelemetry-instrumentation-active_job",  "~> 0.8"   # Rails jobs
 # gem "opentelemetry-instrumentation-sidekiq",     "~> 0.26"
@@ -81,7 +78,7 @@ gem "opentelemetry-instrumentation-all", "~> 0.76"  # pre-1.0
 > [opentelemetry-ruby-contrib (instrumentation)](https://github.com/open-telemetry/opentelemetry-ruby-contrib),
 > [OTel Ruby getting started](https://opentelemetry.io/docs/languages/ruby/).
 
-### Configure — Rails
+### Configure
 
 Put the config in an initializer. `use_all` activates every installed
 instrumentation gem.
@@ -95,31 +92,6 @@ OpenTelemetry::SDK.configure do |c|
   c.service_name = "my_app"
   c.use_all   # or c.use "OpenTelemetry::Instrumentation::Rails", {} per-gem
 end
-```
-
-### Configure — Sinatra
-
-Sinatra has no initializers dir — require and configure in your boot file
-(`config.ru` or `app.rb`) before the app class loads, so Rack is wrapped first.
-A pure Sinatra app must also add `gem "activesupport"` if you use
-`ActiveSupport::Notifications` (see below).
-
-```ruby
-# config.ru (top, before require_relative "app")
-require "opentelemetry/sdk"
-require "opentelemetry/instrumentation/all"
-
-OpenTelemetry::SDK.configure do |c|
-  c.service_name = "my_app"
-  c.use "OpenTelemetry::Instrumentation::Rack"
-  c.use "OpenTelemetry::Instrumentation::Sinatra"
-  c.use "OpenTelemetry::Instrumentation::PG"      # if using pg directly
-  c.use "OpenTelemetry::Instrumentation::Faraday"
-  c.use "OpenTelemetry::Instrumentation::Sidekiq" # if using Sidekiq
-end
-
-require_relative "app"
-run MyApp::App
 ```
 
 ### Exporter / endpoint
@@ -144,8 +116,8 @@ spans for what they cannot see.
 
 | Layer | Covered by (auto) | You write |
 |---|---|---|
-| Inbound HTTP request | `-rack` + `-rails` / `-sinatra` | nothing |
-| DB query (ActiveRecord / pg) | `-active_record` / `-pg` | nothing |
+| Inbound HTTP request | `-rack` + `-rails` | nothing |
+| DB query (ActiveRecord) | `-active_record` | nothing |
 | Outbound HTTP (Faraday) | `-faraday` | nothing |
 | Background job (ActiveJob / Sidekiq) | `-active_job` / `-sidekiq` | nothing |
 | Redis | `-redis` | nothing |
@@ -215,8 +187,7 @@ end
 
 Use `ActiveSupport::Notifications` as the in-process event/metrics bus. Emit a
 named event at the business-significant moment; subscribers turn events into
-metrics, audit entries, or log lines — without the emitter knowing. Available
-standalone outside Rails — a pure Sinatra app adds `gem "activesupport"`.
+metrics, audit entries, or log lines — without the emitter knowing.
 
 Event names follow the `event.library` convention: `<operation>.my_app`.
 
@@ -229,7 +200,7 @@ ActiveSupport::Notifications.instrument(
   # optional: wrap work to capture duration automatically
 end
 
-# Subscribe — once at boot (Rails initializer / Sinatra boot file)
+# Subscribe — once at boot (Rails initializer)
 ActiveSupport::Notifications.subscribe("subscription_created.my_app") do |name, start, finish, _id, payload|
   MyApp::Metrics.increment("subscription.created", tags: payload)
 end
@@ -295,8 +266,8 @@ span.add_attributes(
 
 HTTP and DB spans use the OpenTelemetry **semantic convention** names
 (`http.request.method`, `http.response.status_code`, `url.path`, `db.system`,
-`db.statement`, …). These are **auto-emitted** by the rack/rails/sinatra and
-active_record/pg instrumentation — so backends recognize them out of the box.
+`db.statement`, …). These are **auto-emitted** by the rack/rails and
+active_record instrumentation — so backends recognize them out of the box.
 
 For your own business attributes, namespace under `my_app.*`. Do **not** re-emit
 a semconv attribute under a custom name, and do not duplicate one the
@@ -332,8 +303,6 @@ automatically**: the span created when a job runs links to the request that
 enqueued it. You write nothing for context plumbing — just enrich the active
 span with business attributes inside the job.
 
-**Rails (ActiveJob):**
-
 ```ruby
 class WebhookEventJob < ApplicationJob
   queue_as :default
@@ -342,19 +311,6 @@ class WebhookEventJob < ApplicationJob
     OpenTelemetry::Trace.current_span.set_attribute("my_app.account.id", account_id)
     MyApp::Current.account_id = account_id   # see Current section below
     # ... process; trace already linked to the enqueuing request
-  end
-end
-```
-
-**Sinatra (Sidekiq):**
-
-```ruby
-class WebhookEventWorker
-  include Sidekiq::Job
-
-  def perform(account_id, event_id)
-    OpenTelemetry::Trace.current_span.set_attribute("my_app.account.id", account_id)
-    # ... process
   end
 end
 ```
@@ -427,10 +383,8 @@ logger.info("resource created", resource_id: r.id, account_id: account.id)
 logger.info("Resource #{r.id} created for account #{account.id}")
 ```
 
-### Rails
-
 Use **`lograge`** (one structured line per request) or **`semantic_logger`** /
-`rails_semantic_logger`. `lograge` is **Rails-only** — it unhooks the default
+`rails_semantic_logger`. `lograge` unhooks the default
 ActionController/ActionView log subscribers.
 
 ```ruby
@@ -454,34 +408,6 @@ end
 > Sources: [lograge](https://github.com/roidrage/lograge),
 > [rails_semantic_logger](https://github.com/reidmorrison/rails_semantic_logger).
 
-### Sinatra
-
-`lograge` does **not** apply. Replace `Rack::CommonLogger` with a structured
-logger — `semantic_logger` standalone, or a small Rack middleware that emits one
-JSON line per request with the same fields.
-
-```ruby
-# app.rb
-require "semantic_logger"
-SemanticLogger.add_appender(io: $stdout, formatter: :json)
-
-class MyApp::App < Sinatra::Base
-  disable :logging                       # turn off Rack::CommonLogger default
-  use Rack::CommonLogger, SemanticLogger["MyApp"]  # or a custom structured middleware
-
-  before do
-    span = OpenTelemetry::Trace.current_span.context
-    SemanticLogger.tagged(
-      request_id: request.env["HTTP_X_REQUEST_ID"],
-      trace_id:   span.hex_trace_id,
-      account_id: MyApp::Current.account_id
-    )
-  end
-end
-```
-
-> Source: [semantic_logger](https://github.com/reidmorrison/semantic_logger).
-
 ### Log levels
 
 - `debug` — query params, idempotency keys, detailed trace info
@@ -497,7 +423,7 @@ Set the account/user/request id **once** per request or job, then read it
 anywhere — span attributes, log fields, metric tags — instead of threading it
 through every method signature.
 
-### Rails — `ActiveSupport::CurrentAttributes`
+### `ActiveSupport::CurrentAttributes`
 
 ```ruby
 # app/models/current.rb
@@ -520,33 +446,6 @@ end
 ```
 
 Rails **resets `CurrentAttributes` automatically** between requests — no leak.
-
-### Sinatra — fiber/thread-local store with a reset hook
-
-Sinatra has no `Current`. Use a fiber-local store and **reset it in an `after`
-hook** — threaded servers (Puma) reuse threads, so an un-reset store leaks one
-request's identity into the next.
-
-```ruby
-module MyApp
-  module Current
-    def self.account_id = Thread.current[:my_app_account_id]
-    def self.account_id=(v) = (Thread.current[:my_app_account_id] = v)
-    def self.reset! = Thread.current[:my_app_account_id] = nil
-  end
-end
-
-class MyApp::App < Sinatra::Base
-  before do
-    MyApp::Current.account_id = current_account&.id
-    OpenTelemetry::Trace.current_span.set_attribute(
-      "my_app.account.id", MyApp::Current.account_id
-    ) if MyApp::Current.account_id
-  end
-
-  after { MyApp::Current.reset! }   # REQUIRED — prevent cross-request leak
-end
-```
 
 ---
 
@@ -588,7 +487,7 @@ end
 - [ ] Jobs enrich the active span (context propagation is automatic)
 - [ ] Business-significant events `instrument`ed → metrics subscriber
 - [ ] Logs use structured fields (`request_id`, `trace_id`, ids), not interpolation
-- [ ] `Current` (Rails) / fiber-local + `reset!` (Sinatra) set once per request
+- [ ] `Current` set once per request
 - [ ] No PII in any span attribute, log field, or metric tag
 - [ ] Error paths call `record_exception` + set span status `error`
 - [ ] Test: custom Notifications fire with the right payload (not the SDK)

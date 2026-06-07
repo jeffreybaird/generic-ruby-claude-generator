@@ -5,43 +5,49 @@ system infrastructure. These are decisions made early to avoid costly retrofits
 later. Follow them in all new code.
 
 > **Baseline:** Ruby 3.3+ · Rails 8.0 (Hotwire, Propshaft, importmap, Solid
-> Queue/Cache/Cable, Kamal 2, Tailwind) · Sinatra 4 (Rack, Puma) · PostgreSQL.
+> Queue/Cache/Cable, Kamal 2, Tailwind) · PostgreSQL.
 > Domain logic in service objects returning Result types; request context via
 > Current attributes; authorization via Pundit.
 
-**Dual-framework reading guide.** Rails 8 is batteries-included; Sinatra 4 is
-minimal Rack and you assemble the pieces yourself. Where the two differ, the
-section splits **Rails** vs **Sinatra**. Where they are identical, it is stated
-once. Sinatra notes assume you have pulled in `activesupport` (~> 8.0) and an ORM
-(ActiveRecord, Sequel, or ROM); several Rails-native facilities below do not
-exist in Sinatra and must be added.
-
-| Topic | Rails 8 | Sinatra 4 |
-|-------|---------|-----------|
-| Result type | identical (`dry-monads` or hand-rolled) | identical |
-| Audit log | `audited`/`paper_trail` **or** event subscriber | event subscriber (hand-rolled) |
-| Soft delete | `discard` gem | `deleted_at` column + scope helper |
-| Pagination | Pagy or Kaminari | Pagy (Kaminari is AR/Rails-only) |
-| Events | `ActiveSupport::Notifications` (built in) | `ActiveSupport::Notifications` (via `activesupport`) |
-| Idempotency keys | identical | identical |
-| Feature flags | Flipper | Flipper |
-| Request context | `ActiveSupport::CurrentAttributes` | per-request object in Rack `env` |
-| Job tenant id | Active Job / Solid Queue arg | Sidekiq/`sucker_punch` arg |
-| Data export | identical service object | identical service object |
+| Topic | Rails 8 |
+|-------|---------|
+| Result type | `dry-monads` or hand-rolled |
+| Audit log | `audited`/`paper_trail` **or** event subscriber |
+| Soft delete | `discard` gem |
+| Pagination | Pagy or Kaminari |
+| Side effects | called directly after commit (inline / `perform_later`) |
+| Idempotency keys | deterministic key per external mutation |
+| Feature flags | Flipper |
+| Request context | `ActiveSupport::CurrentAttributes` |
+| Job tenant id | Active Job / Solid Queue arg |
+| Data export | single tenant-scoped service object |
 
 ---
 
 ## 1. Result / Tagged-Error Pattern
 
-Service objects return an **explicit Result**, never a bare boolean and never an
-exception used for control flow. The Result carries a tagged error so the caller
-knows the failure *kind* without inspecting a string. This is the Ruby analog of
-Elixir's tagged tuples, and it prepares the domain layer for a future public API
-without a rewrite.
+The principle: **expected, recoverable outcomes are values the caller branches on,
+not exceptions raised for control flow.** Not found, invalid input, over a plan
+limit — these are ordinary results, and `raise` is reserved for the truly
+exceptional (programmer error, unreachable state, infrastructure down).
 
-**Reserve `raise` for the truly exceptional** — programmer error, unreachable
-state, infrastructure down. Expected, recoverable outcomes (not found, invalid
-input, over a plan limit) are *values*, not exceptions.
+This template's **default** for surfacing those outcomes is a tagged Result: the
+Result carries a tagged error so the caller knows the failure *kind* without
+inspecting a string. This is the Ruby analog of Elixir's tagged tuples, and it
+prepares the domain layer for a future public API without a rewrite. It earns its
+keep most when an operation has several distinct failure modes.
+
+**Tagged Results are not the only idiom**, and for simple cases plain Rails is
+often clearer:
+
+- A `model.save` / `update` that returns `false` with `model.errors` populated —
+  fine for a single-model create/update where the controller just re-renders the form.
+- Raising a domain exception and rescuing it at the boundary — fine when the failure
+  really is exceptional, or when one rescue at the controller/route covers many actions.
+
+Pick one approach per context and stay consistent. Whatever you pick: don't return a
+bare boolean or `nil` where the caller needs to know *why* it failed, and never leak
+a raw exception string out of the domain layer as the error (strings are a view concern).
 
 ### Default: `dry-monads`
 
@@ -63,7 +69,7 @@ module MyApp
 
         post = account.posts.new(attrs)
         if post.save
-          ActiveSupport::Notifications.instrument("my_app.post.created", post: post, actor: actor)
+          MyApp::Audit.record("post.created", resource: post, actor: actor)  # side effects: see §5
           Success(post)
         else
           Failure([:validation, post.errors])
@@ -99,7 +105,7 @@ Rules:
 dry-monads wraps the array as a tuple, so `case/in` deconstructs it directly.
 Use `Failure[...]` (brackets) in patterns. ([pattern matching](https://hanakai.org/learn/dry/dry-monads/v1.8/pattern-matching))
 
-**Rails controller**
+**Controller**
 
 ```ruby
 class PostsController < ApplicationController
@@ -119,21 +125,6 @@ class PostsController < ApplicationController
     in Failure[code, *]
       Rails.logger.warn("unhandled result", code:) and head :unprocessable_entity
     end
-  end
-end
-```
-
-**Sinatra route** (same Result, same `case/in`)
-
-```ruby
-post "/posts" do
-  case MyApp::Posts::Create.call(account: current.account, actor: current.user, attrs: params[:post])
-  in Success(post)             then redirect "/posts/#{post.id}"
-  in Failure[:validation, e]   then status 422; erb :new, locals: { errors: e }
-  in Failure[:forbidden]       then halt 403
-  in Failure[:not_found]       then halt 404
-  in Failure[:unauthenticated] then halt 401
-  in Failure[code, *]          then halt 422
   end
 end
 ```
@@ -185,39 +176,39 @@ from where**. No exceptions.
 Action naming is `resource.verb`: `post.created`, `post.updated`, `post.deleted`,
 `member.invited`, `subscription.canceled`, `settings.updated`.
 
-### Rails — gem or subscriber
+### Gem or a small audit helper
 
 - **Gem path:** `audited` (~> 5) for a single `audits` table across models, or
-  `paper_trail` for full versioning/diffing.
+  `paper_trail` for full versioning/diffing. These hook ActiveRecord callbacks, so
+  you get audit rows with no changes to your services.
   ([audited](https://github.com/collectiveidea/audited),
   [paper_trail](https://github.com/paper-trail-gem/paper_trail))
-- **Preferred (per §5):** an event subscriber, so audit is a *reaction* to a
-  published event rather than logic inlined in the model. This keeps the mutation
-  path clean and makes audit one of several independent side effects.
+- **Service path:** a small helper the service calls directly, right after the
+  mutation commits (§5). Reads actor/account/request_id/ip from the per-request
+  context (§8), so the call site stays a one-liner.
 
 ```ruby
-# config/initializers/audit_subscriber.rb
-ActiveSupport::Notifications.subscribe(/\Amy_app\.\w+\.\w+\z/) do |name, _start, _finish, _id, payload|
-  resource = payload[:post] || payload[:resource]
-  MyApp::AuditLog.create!(
-    actor_id:      Current.user&.id,
-    account_id:    Current.account&.id,
-    action:        name.delete_prefix("my_app."),     # "post.created"
-    resource_type: resource.class.name,
-    resource_id:   resource.id,
-    changes:       resource.try(:saved_changes) || {},
-    request_id:    Current.request_id,
-    ip:            Current.ip
-  )
+# app/services/my_app/audit.rb
+module MyApp
+  class Audit
+    def self.record(action, resource:, actor: Current.user)
+      AuditLog.create!(
+        actor_id:      actor&.id,
+        account_id:    Current.account&.id,
+        action:        action,                          # "post.created"
+        resource_type: resource.class.name,
+        resource_id:   resource.id,
+        changes:       resource.try(:saved_changes) || {},
+        request_id:    Current.request_id,
+        ip:            Current.ip
+      )
+    end
+  end
 end
+
+# in the service, after save/commit:
+MyApp::Audit.record("post.created", resource: post, actor: actor)
 ```
-
-### Sinatra — subscriber (no AR callback magic)
-
-No `audited`/`paper_trail` (they hook ActiveRecord internals). Subscribe to the
-same `ActiveSupport::Notifications` topic and insert an audit row via your ORM.
-The actor/account/request_id come from the per-request context (§8), not the event
-payload.
 
 > Audit rows are **append-only and never soft-deleted** (§3). Retention is a
 > separate pruning job.
@@ -236,7 +227,7 @@ explicit `with_discarded` escape hatch for admin views and export.
 | `Plan`, `Notification`, `WebhookEndpoint` | analytics/event rows (append-only) |
 | `Account` (deactivate, don't destroy) | sessions / API tokens (revoke = gone) |
 
-### Rails — `discard` gem
+### `discard` gem
 
 Community default; adds `deleted_at`, `discard`/`undiscard`, and `kept`/`discarded`
 scopes. ([discard](https://github.com/jhawthorn/discard), `gem "discard", "~> 1.3"`)
@@ -252,32 +243,16 @@ end
 Post.all
 # ✅ admin / export — include discarded
 Post.with_discarded
-# delete = discard + event (drives audit "post.deleted")
+# delete = discard + audit ("post.deleted")
 post.discard
-ActiveSupport::Notifications.instrument("my_app.post.deleted", post:)
+MyApp::Audit.record("post.deleted", resource: post)
 ```
 
 > Be deliberate with `default_scope`: it applies to associations too. The common
 > alternative is **no default scope**, calling `.kept` explicitly in every finder —
 > safer but easy to forget. Pick one project-wide and document it.
 
-### Sinatra — column + helper
-
-Add a `deleted_at` migration. Provide a query helper rather than relying on a gem.
-
-```ruby
-# Sequel
-class Post < Sequel::Model
-  dataset_module do
-    def kept           = where(deleted_at: nil)
-    def with_discarded = self
-  end
-  def discard = update(deleted_at: Time.now)
-end
-# Every list query starts from Post.kept; admin/export uses Post.with_discarded.
-```
-
-Restoration sets `deleted_at` back to `nil` and emits `post.restored`.
+Restoration sets `deleted_at` back to `nil` and records a `post.restored` audit entry.
 
 ---
 
@@ -289,8 +264,8 @@ current UI shows everything.
 
 ### Default: Pagy
 
-Community default — fastest, lowest memory, framework-agnostic (works in both
-Rails and Sinatra). ([pagy](https://github.com/ddnexus/pagy), `gem "pagy", "~> 43.0"`)
+Community default — fastest, lowest memory, framework-agnostic.
+([pagy](https://github.com/ddnexus/pagy), `gem "pagy", "~> 43.0"`)
 
 > **Version note:** Pagy 43 (2026) is a full API redesign — the backend is the
 > `pagy(:offset, scope, ...)` form below via `Pagy::Method`. If your `Gemfile.lock`
@@ -314,50 +289,56 @@ end
 
 ### Alternative: Kaminari
 
-`gem "kaminari"` — ActiveRecord/Rails-only (relies on AR relations), not usable on
-Sinatra + Sequel/ROM. Use only in a Rails-only project that already standardized on
-it. ([kaminari](https://github.com/kaminari/kaminari))
+`gem "kaminari"` — ActiveRecord/Rails-only (relies on AR relations). Use only if
+your project has already standardized on it. ([kaminari](https://github.com/kaminari/kaminari))
 
 ---
 
-## 5. Event-Driven Side Effects, Not Inline
+## 5. Side Effects After Commit
 
-A mutation **publishes an event**; subscribers react. A new side effect is a **new
-subscriber**, never an edit to the mutating service. Subscribers that do real work
-(webhooks, email, third-party sync) **enqueue a background job** for reliable,
-retryable delivery — they do not call out synchronously inside the request.
-
-```ruby
-# Mutation publishes (one line, no side effects inlined):
-ActiveSupport::Notifications.instrument("my_app.post.created", post:, actor: Current.user)
-```
-
-([ActiveSupport::Notifications](https://guides.rubyonrails.org/active_support_instrumentation.html))
-
-| Side effect | Subscriber does |
-|-------------|-----------------|
-| Audit log | insert audit row synchronously (§2) — cheap, must not be lost |
-| Webhook dispatch | `MyApp::WebhookJob.perform_later(account_id:, event:, payload:)` |
-| Notification email | enqueue mailer job |
-| Cache invalidation | `Rails.cache.delete_matched(...)` / bust key |
+When a mutation has side effects — audit log, webhook dispatch, notification email,
+cache invalidation — the service performs them directly, **after the write commits**.
+Cheap, must-not-be-lost work (an audit row) runs inline; slow or external work
+(webhooks, email, third-party sync) is handed to a **background job** so the request
+isn't blocked and delivery is retryable.
 
 ```ruby
-ActiveSupport::Notifications.subscribe("my_app.post.created") do |*, payload|
-  MyApp::WebhookJob.perform_later(account_id: payload[:post].account_id,
-                                  event: "post.created",
-                                  payload: payload[:post].as_json)
+def call(...)
+  post = nil
+  ActiveRecord::Base.transaction do
+    post = account.posts.create!(attrs)
+    # ...any other writes that must be atomic with it...
+  end
+
+  # AFTER the transaction commits — side effects, called directly:
+  MyApp::Audit.record("post.created", resource: post, actor:)         # inline: cheap, durable (§2)
+  MyApp::WebhookJob.perform_later(account_id: post.account_id,        # enqueued: slow/external
+                                  event: "post.created", payload: post.as_json)
+  MyApp::PostMailer.published(post).deliver_later                     # enqueued
+  Rails.cache.delete("account:#{post.account_id}:post_count")        # bust the cache key
+
+  Success(post)
 end
 ```
 
-- ✅ `Posts::Create` publishes one event; audit, webhook, email are separate subscribers.
-- ❌ `Posts::Create` calling `AuditLog.create!` *and* `Webhook.post` *and*
-  `Mailer.deliver` inline — every new effect now edits the service.
+| Side effect | How |
+|-------------|-----|
+| Audit log | `MyApp::Audit.record(...)` inline after commit (§2) — cheap, must not be lost |
+| Webhook dispatch | `MyApp::WebhookJob.perform_later(account_id:, event:, payload:)` |
+| Notification email | `Mailer#...#deliver_later` (enqueues a job) |
+| Cache invalidation | `Rails.cache.delete(...)` / bust the key |
 
-**Rails:** `ActiveSupport::Notifications` is built in. **Sinatra:** identical API,
-available once `activesupport` is required; register subscribers at boot.
+Run side effects **after** the transaction commits — after the `transaction` block as
+above, or from an `after_commit` callback on the model — so nothing reacts to a write
+that later rolls back.
 
-> Naming: `my_app.<resource>.<verb>`, matching the audit `action`. Keep the
-> instrument payload small (the record + actor), not preloaded association trees.
+> **When direct calls stop scaling.** If one mutation accretes many unrelated side
+> effects, or the same effect is needed after several different mutations, an
+> in-process pub/sub bus
+> ([`ActiveSupport::Notifications`](https://guides.rubyonrails.org/active_support_instrumentation.html))
+> is a reasonable refactor — the mutation broadcasts, handlers react. Reach for it when
+> the duplication is real, not as the default; for most services a direct call is
+> simpler to read and to test.
 
 ---
 
@@ -401,9 +382,6 @@ Flipper.enable_group(:beta_export, :pro_accounts)    # by group
 - ✅ `return Failure([:feature_not_enabled]) unless Flipper.enabled?(:export, account)`
 - ❌ hardcoded plan checks scattered across services and views.
 
-Identical in Rails and Sinatra (Flipper is Rack-based; mount the optional Flipper UI
-as Rack middleware in either).
-
 ---
 
 ## 8. Request Context (`Current` Attributes)
@@ -416,8 +394,6 @@ requests on a reused thread/fiber.
 > **Scope ≠ authorization.** `Current` defines the *data boundary* (which tenant's
 > rows you may even see). *Whether this actor may perform this action* is Pundit's
 > job (its own doc). Never use `Current` as an authorization check.
-
-### Rails — `ActiveSupport::CurrentAttributes`
 
 ([CurrentAttributes](https://api.rubyonrails.org/classes/ActiveSupport/CurrentAttributes.html))
 
@@ -442,27 +418,6 @@ end
 `CurrentAttributes` is reset automatically between requests by the Rails executor —
 do not memoize it across jobs.
 
-### Sinatra — per-request object via middleware
-
-No `CurrentAttributes` reset machinery. Build a per-request context, store it in the
-Rack `env` (or a thread-local you explicitly clear in an `after` filter), and reset
-it every request.
-
-```ruby
-class MyApp::RequestContext < Struct.new(:user, :account, :request_id, :ip)
-  def self.current = Thread.current[:my_app_ctx]
-end
-
-before do
-  Thread.current[:my_app_ctx] =
-    MyApp::RequestContext.new(current_user, current_account, request.env["action_dispatch.request_id"] || SecureRandom.uuid, request.ip)
-end
-after { Thread.current[:my_app_ctx] = nil }   # mandatory: prevent cross-request leak
-```
-
-The audit subscriber (§2) reads actor/account/request_id/ip from here, so individual
-services never pass request metadata.
-
 ---
 
 ## 9. Background Jobs Carry the Tenant / Scope Id
@@ -471,7 +426,7 @@ Every enqueued job includes the relevant **account/tenant id (and owner id)** in
 args — for fair scheduling, monitoring, and so the worker can re-establish scope.
 A platform-wide job (cleanup, aggregation) is the only exception.
 
-**Rails — Active Job on Solid Queue**
+**Active Job on Solid Queue**
 
 ```ruby
 class MyApp::WebhookJob < ApplicationJob
@@ -484,8 +439,6 @@ class MyApp::WebhookJob < ApplicationJob
 end
 MyApp::WebhookJob.perform_later(account_id: account.id, event:, payload:)
 ```
-
-**Sinatra — Sidekiq / sucker_punch**: same rule, tenant id is the first arg.
 
 - ✅ `perform_later(account_id: account.id, post_id: post.id)`
 - ❌ `perform_later(post)` with no tenant id, relying on ambient state that does not
@@ -526,7 +479,6 @@ Rules:
 - **Update this service every time you add a tenant-scoped table.** A missing table
   here is a silent compliance gap. A test should assert every tenant-scoped model
   appears in the export.
-- Identical in Rails and Sinatra.
 
 ---
 
@@ -534,12 +486,12 @@ Rules:
 
 When adding a feature, verify:
 
-- [ ] Service object returns a tagged `Result` (`Success`/`Failure[...]`), never a bare bool or string error
-- [ ] Every `Failure[...]` tag has a controller/route arm **and** a test
+- [ ] Expected failures are surfaced as values, not control-flow exceptions — a tagged `Result` (the default), or `model.errors`; never a bare bool or raw string error
+- [ ] Every `Failure[...]` tag (or error branch) has a controller/route arm **and** a test
 - [ ] New user-facing model has `deleted_at` (soft delete); list queries filter it by default
 - [ ] New model is scoped to the tenant (`account_id`)
 - [ ] List methods accept `page` / `per_page`, clamp `per_page ≤ 100`, return the paginated struct
-- [ ] Mutations **publish an event**; side effects are subscribers, not inline
+- [ ] Side effects (audit, webhooks, email, cache bust) run **after the write commits** — inline call for cheap/durable work, enqueued job for slow/external work
 - [ ] External mutations carry a **deterministic** idempotency key
 - [ ] Plan-tier / rollout behavior is gated behind a Flipper flag
 - [ ] Background jobs include `account_id` in args; idempotent + unique where needed

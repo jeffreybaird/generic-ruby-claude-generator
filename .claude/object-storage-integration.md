@@ -17,12 +17,12 @@ class behind an injectable seam; stub it in specs; secrets via ENV/credentials).
 
 | Approach | When | Notes |
 |---|---|---|
-| **Active Storage** (Rails default) <span title="stable">`[stable]`</span> | Rails 8 apps | Built-in. Direct uploads, variants, multiple services. Manages its own keys (see caveat). [guide](https://guides.rubyonrails.org/active_storage_overview.html) |
-| [`shrine`](https://github.com/shrinerb/shrine) `~> 3` <span title="stable">`[stable]`</span> | Sinatra, or Rails apps needing fine-grained control | Plugin-based; explicit presigned uploads; you control keys. |
-| [`aws-sdk-s3`](https://github.com/aws/aws-sdk-ruby) `~> 1` <span title="stable">`[stable]`</span> | Sinatra / advanced; lowest level | Full S3 surface (presign, multipart, lifecycle). Wrap behind `MyApp::Storage::Client`. |
+| **Active Storage** (default) <span title="stable">`[stable]`</span> | Rails 8 apps | Built-in. Direct uploads, variants, multiple services. Manages its own keys (see caveat). [guide](https://guides.rubyonrails.org/active_storage_overview.html) |
+| [`shrine`](https://github.com/shrinerb/shrine) `~> 3` <span title="stable">`[stable]`</span> | Apps needing fine-grained control | Plugin-based; explicit presigned uploads; you control keys. |
+| [`aws-sdk-s3`](https://github.com/aws/aws-sdk-ruby) `~> 1` <span title="stable">`[stable]`</span> | Advanced; lowest level | Full S3 surface (presign, multipart, lifecycle). Wrap behind `MyApp::Storage::Client`. |
 
-**Rails: default to Active Storage.** **Sinatra / advanced: shrine or
-aws-sdk-s3.** Pick one — don't run two side by side.
+**Default to Active Storage.** For fine-grained control, use shrine or
+aws-sdk-s3. Pick one — don't run two side by side.
 
 ---
 
@@ -42,7 +42,7 @@ Browser                     App server                  Bucket (S3/R2/Spaces)
   |-- POST /uploads/confirm -->| (persist key to DB)          |
 ```
 
-### Rails — Active Storage direct upload
+### Active Storage direct upload
 
 Active Storage ships a `DirectUpload` JS helper that requests a signed URL from
 the built-in `/rails/active_storage/direct_uploads` endpoint, PUTs the file to the
@@ -69,10 +69,10 @@ class User < ApplicationRecord
 end
 ```
 
-### Sinatra / advanced — presigned PUT behind one client
+### Advanced — presigned PUT behind one client
 
 ```ruby
-# lib/my_app/storage/client.rb
+# app/clients/my_app/storage/client.rb
 require "aws-sdk-s3"
 
 module MyApp
@@ -119,12 +119,14 @@ end
 
 ```ruby
 # Sign endpoint stays thin — call the client, return url + key
-post "/uploads/sign" do
-  key    = MyApp::Storage.key_for(account: Current.account, kind: "avatar", filename: params[:filename])
-  result = MyApp::Storage::Client.new.presigned_put_url(key:, content_type: params[:content_type])
-  case result.to_tuple
-  in [:ok, url] then json(url:, key:)
-  in [:error, :external_service_error, _] then halt 502
+class UploadsController < ApplicationController
+  def sign
+    key    = MyApp::Storage.key_for(account: Current.account, kind: "avatar", filename: params[:filename])
+    result = MyApp::Storage::Client.new.presigned_put_url(key:, content_type: params[:content_type])
+    case result
+    in Success(url) then render json: { url:, key: }
+    in Failure([:external_service_error, _]) then head :bad_gateway
+    end
   end
 end
 ```

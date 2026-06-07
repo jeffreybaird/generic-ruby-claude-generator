@@ -4,7 +4,7 @@
 
 This file is the authoritative reference for all frontend work on `<project name>`. Read it before writing any template, component, view, or CSS. Follow conventions already established in the codebase — discover before building.
 
-> **Baseline:** Tailwind CSS (tailwindcss-rails on Rails, standalone CLI on Sinatra) · CSS custom properties for tokens · ViewComponent (Rails) for reusable components · ERB templates. Tokens are CSS variables — overridable per tenant.
+> **Baseline:** Tailwind CSS (tailwindcss-rails) · CSS custom properties for tokens · ViewComponent for reusable components · ERB templates. Tokens are CSS variables — overridable per tenant.
 
 **Maturity tags:** **[core]** apply to every project · **[recommended]** strong default, skip only with reason · **[optional]** include only if the app needs it.
 
@@ -20,18 +20,16 @@ Tone: `<adjectives — e.g., "direct, friendly, confident">`. Not `<what it shou
 
 ---
 
-## Stack — dual-framework **[core]**
+## Stack **[core]**
 
-The token system, component principles, and accessibility rules are identical across both frameworks. Only the build tooling and the component primitive differ.
-
-| Concern | Rails 8 | Sinatra 4 |
-|---|---|---|
-| Tailwind install | `tailwindcss-rails` (standalone, no Node) **or** `cssbundling-rails` (npm/esbuild) ([guides.rubyonrails.org/asset_pipeline](https://guides.rubyonrails.org/asset_pipeline.html)) | Tailwind standalone CLI ([tailwindcss.com/blog/standalone-cli](https://tailwindcss.com/blog/standalone-cli)) |
-| Build command | `bin/rails tailwindcss:watch` (dev) / runs in `bin/dev` via Procfile | `tailwindcss -i app.css -o public/css/app.css --watch` |
-| Reusable component | **ViewComponent** ([viewcomponent.org](https://viewcomponent.org/)) — testable, encapsulated | ERB partials + helper methods |
-| Template engine | ERB (`.html.erb`) | ERB (`.erb`) via `erb`/Tilt |
-| Client interactivity | Stimulus (Hotwire) ([stimulus.hotwired.dev](https://stimulus.hotwired.dev/)) | Stimulus standalone or plain JS modules |
-| Icon set | `<e.g., Heroicons via heroicon gem / inline SVG partials>` | `<e.g., inline SVG partials>` |
+| Concern | Rails 8 |
+|---|---|
+| Tailwind install | `tailwindcss-rails` (standalone, no Node) **or** `cssbundling-rails` (npm/esbuild) ([guides.rubyonrails.org/asset_pipeline](https://guides.rubyonrails.org/asset_pipeline.html)) |
+| Build command | `bin/rails tailwindcss:watch` (dev) / runs in `bin/dev` via Procfile |
+| Reusable component | **ViewComponent** ([viewcomponent.org](https://viewcomponent.org/)) — testable, encapsulated |
+| Template engine | ERB (`.html.erb`) |
+| Client interactivity | Stimulus (Hotwire) ([stimulus.hotwired.dev](https://stimulus.hotwired.dev/)) |
+| Icon set | `<e.g., Heroicons via heroicon gem / inline SVG partials>` |
 
 - **tailwindcss-rails** ships the standalone binary — no Node toolchain required ([github.com/rails/tailwindcss-rails](https://github.com/rails/tailwindcss-rails)). Prefer it unless you already run a JS bundler, in which case use `cssbundling-rails`.
 - Font sources: `<Google Fonts / self-hosted / system only>`. Custom font upload: `<supported / not supported>`.
@@ -42,8 +40,7 @@ The token system, component principles, and accessibility rules are identical ac
 
 Before creating any file, component, or template, read the existing codebase to understand:
 
-- **Rails:** how controllers/views are organized, where `ViewComponent`s live (`app/components/`), how `application.html.erb` and partials are structured, how routes map to actions.
-- **Sinatra:** the route/handler layout (`app.rb` or modular `Sinatra::Base` subclasses), where `views/` and partials live, what layout file is in use.
+- How controllers/views are organized, where `ViewComponent`s live (`app/components/`), how `application.html.erb` and partials are structured, how routes map to actions.
 - How CSS is built and where the compiled bundle is served from.
 - How authentication and the current-tenant lookup work (relevant to per-tenant theming).
 
@@ -65,7 +62,7 @@ Define tokens once in a **base CSS layer**, then expose them to Tailwind so util
 Note both versions ship with `tailwindcss-rails`; check the gem version to know which directive set applies.
 
 ```css
-/* app/assets/stylesheets/application.tailwind.css (Rails) or app.css (Sinatra) */
+/* app/assets/stylesheets/application.tailwind.css */
 
 /* 1. Base token layer — single source of truth */
 @layer base {
@@ -168,7 +165,7 @@ Define a small set of semantic font roles as CSS variables. Collapse roles you d
 
 ## Components **[core]**
 
-### Rails → ViewComponent (reusable UI)
+### ViewComponent (reusable UI)
 
 Use **ViewComponent** for any UI element reused across views, or any element with non-trivial logic/variants. ViewComponents are Ruby objects with a paired template — unit-testable in isolation and encapsulated from the surrounding view ([viewcomponent.org](https://viewcomponent.org/), [viewcomponent.org/guide/testing.html](https://viewcomponent.org/guide/testing.html)).
 
@@ -199,24 +196,6 @@ end
 
 - Use **partials** for simple, logic-free fragments (`render "shared/badge"`).
 - Use a **ViewComponent** when there are variants, slots, conditional classes, or behavior worth a unit test. Every behavior-bearing component gets a `ViewComponent::TestCase` spec — per CLAUDE.md, every addition that adds behavior ships with a test.
-
-### Sinatra → partials + helpers
-
-Sinatra has no ViewComponent. Reusable UI is ERB partials rendered via `erb :partial, layout: false`, with logic extracted into helper methods.
-
-```ruby
-# Sinatra 4 modular app — helpers defined on the application class
-class MyApp < Sinatra::Base
-  helpers do
-    def button(label, variant: :primary)
-      classes = { primary: "bg-accent text-accent-text", ghost: "bg-transparent" }.fetch(variant)
-      %(<button type="button" class="inline-flex rounded-md px-4 py-2 #{classes}">#{ERB::Util.html_escape(label)}</button>)
-    end
-  end
-end
-```
-
-Always escape interpolated content (`ERB::Util.html_escape` / `<%= %>`, never `<%== %>` on user data).
 
 ---
 
@@ -320,8 +299,6 @@ export default class extends Controller {
 ```erb
 <button type="button" data-controller="theme" data-action="theme#toggle" aria-label="Toggle dark mode">…</button>
 ```
-
-For Sinatra without Hotwire, the same 15-line plain-JS module works — read `localStorage`, set the attribute on `connect`, toggle on click.
 
 ---
 

@@ -1,23 +1,32 @@
 # Separation of Concerns — Controllers/Routes vs Service Objects vs Models
 
-Load this file when writing or modifying any controller, Sinatra route, service
-object, or model. This is the rule that keeps the codebase ready for a JSON API,
-a background worker, a CLI, or any future caller of the same logic.
+Load this file when writing or modifying any controller, service object, or
+model. This is the rule that keeps the codebase ready for a JSON API, a
+background worker, a CLI, or any future caller of the same logic.
 
-> **Baseline:** Ruby 3.3+ · Rails 8 / Sinatra 4. Skinny controllers/routes → service objects (Result types) + models. Request context via Current attributes; authorization via Pundit.
+> **Baseline:** Ruby 3.3+ · Rails 8. Skinny controllers → domain logic in service objects (the default for non-trivial work) or models. Request context via Current attributes; authorization via Pundit.
 
 ---
 
 ## The Rule
 
-**Controllers and routes are thin adapters. Service objects are the application.**
+**Controllers and routes are thin adapters; the domain logic lives behind them.**
 
 A controller action / route block's job is:
 
-1. Parse and whitelist params (`params.expect`/strong params in Rails; `params` in Sinatra).
-2. Call **one** service object (or one trivial model query for a plain read).
-3. Pattern-match the Result.
+1. Parse and whitelist params (`params.expect`/strong params).
+2. Invoke the domain layer — a service object for anything non-trivial, or a model
+   method / scoped query for a plain CRUD action.
+3. Inspect the outcome (pattern-match a Result, or check `record.errors`).
 4. Set flash/status, then render or redirect.
+
+Where the domain logic lives is a judgment call. A service object is the right home
+when an operation spans multiple models, has side effects, or must be callable from
+more than one entry point (web, API, job, CLI). For a plain create/update/destroy,
+idiomatic Rails — a model method, a scope, the controller coordinating a single
+`save`/`update` — is perfectly fine; don't wrap a one-line save in a ceremonial
+service. The line that matters is the one below: business *rules* and orchestration
+don't live in the controller.
 
 A controller/route must NEVER:
 
@@ -44,8 +53,8 @@ business logic goes"
 
 | Layer | Owns | Never does |
 |---|---|---|
-| **Controllers (Rails) / routes (Sinatra)** | Parse + whitelist params; call ONE service (or a scoped model read for trivial reads); pattern-match the Result; set flash/status; render/redirect. | Business rules; raw queries; multi-step orchestration; external API calls; authorization logic inline. |
-| **Service objects** `app/services/MyApp::Posts::Publish` (Rails) / `lib/my_app/posts/publish.rb` (Sinatra), a `call` returning a Result | Business rules; authorization checks (via Pundit); multi-step atomic ops (wrap in `ActiveRecord::Base.transaction`); external API calls; event publishing; audit logging; returning tagged Results. | Rendering; touching `params`/`session`/`flash`; HTTP concerns. |
+| **Controllers** | Parse + whitelist params; invoke the domain layer (a service for non-trivial work, or a model method/scope for trivial CRUD); inspect the outcome (Result or `record.errors`); set flash/status; render/redirect. | Business rules; raw queries; multi-step orchestration; external API calls; authorization logic inline. |
+| **Service objects** `app/services/MyApp::Posts::Publish`, a `call` returning a Result | Business rules; authorization checks (via Pundit); multi-step atomic ops (wrap in `ActiveRecord::Base.transaction`); external API calls; side effects after commit (audit, enqueued jobs, cache busting); returning a Result (or another explicit outcome). | Rendering; touching `params`/`session`/`flash`; HTTP concerns. |
 | **Models (ActiveRecord)** | Persistence; validations; associations; scopes; record-level invariants. | Cross-aggregate orchestration; external calls; multi-record workflows (no fat models doing service work). |
 | **Views / helpers / presenters / ViewComponents** | Formatting only — currency, dates, thumbnail URLs, pluralization. | Business logic; queries; authorization. |
 
@@ -56,10 +65,13 @@ logic.
 
 ## Result type
 
-Service objects return a tagged Result, never a bare boolean or a raised
-exception for expected failures. Use a small value object (or a gem like
-`dry-monads`'s `Success`/`Failure`). Failures carry a serializable tag so a
-future API maps cleanly to HTTP.
+The template's default is for service objects to return a tagged Result rather than
+a bare boolean or a raised exception for expected failures. Use a small value object
+(or a gem like `dry-monads`'s `Success`/`Failure`). Failures carry a serializable tag
+so a future API maps cleanly to HTTP. (For simple single-model actions, returning the
+record and reading `record.errors` is a fine alternative — see
+`architecture-decisions.md` §1. The rule that doesn't bend: expected failures are
+explicit outcomes, never a bare boolean or a raw error string.)
 
 ```ruby
 Success(post)
@@ -80,8 +92,6 @@ callers branch on `:not_ready`, not on prose.
 
 ### ✅ Controller: parse, call one service, match Result <span title="stable">`[stable]`</span>
 
-**Rails**
-
 ```ruby
 class PostsController < ApplicationController
   def publish
@@ -93,19 +103,6 @@ class PostsController < ApplicationController
     in [:error, :forbidden]
       head :forbidden
     end
-  end
-end
-```
-
-**Sinatra**
-
-```ruby
-post "/posts/:id/publish" do
-  result = MyApp::Posts::Publish.call(post_id: params[:id], actor: Current.user)
-  case result.to_tuple
-  in [:ok, post]      then redirect "/posts/#{post.id}"
-  in [:error, :not_ready] then halt 422, "Post must be ready to publish."
-  in [:error, :forbidden] then halt 403
   end
 end
 ```
@@ -200,14 +197,15 @@ module MyApp::Posts
 
     def call
       authorize!(@actor, :create, Post)             # Pundit
-      ActiveRecord::Base.transaction do
-        post = @account.posts.create!(@attrs)
-        FeaturedCollection.current.collection_posts.create!(post:)
-        post.update!(published: true)
-        publish_event(:post_published, post)        # see architecture-decisions.md
-        audit(@actor, :quick_publish, post)
-        Success(post)
+      post = ActiveRecord::Base.transaction do
+        p = @account.posts.create!(@attrs)
+        FeaturedCollection.current.collection_posts.create!(post: p)
+        p.update!(published: true)
+        p
       end
+      # after commit — side effects called directly (see architecture-decisions.md §5)
+      MyApp::Audit.record("post.published", resource: post, actor: @actor)
+      Success(post)
     rescue ActiveRecord::RecordInvalid => e
       Failure([:validation, e.record.errors])       # transaction already rolled back
     rescue Pundit::NotAuthorizedError
@@ -217,10 +215,10 @@ module MyApp::Posts
 end
 ```
 
-Publish events and dispatch side effects **after** the transaction commits
-(here, the call returns the committed record; emit out-of-band side effects via
-`after_commit` or an enqueued job), so a subscriber never reacts to a write that
-later rolls back.
+Run side effects **after** the transaction commits — as above (the record is
+returned from the `transaction` block, then side effects run against it), or via an
+`after_commit` callback or an enqueued job — so nothing reacts to a write that later
+rolls back.
 
 ---
 
@@ -232,7 +230,8 @@ service **first** — never put logic in the controller "temporarily."
 1. **Define** the class: `MyApp::<Context>::<Verb>` with a class-level `call`
    delegating to an instance.
 2. **Implement**: authorization (Pundit), business rules, `ActiveRecord::Base.transaction`
-   for multi-step writes, external calls, event publish, audit, returning a Result.
+   for multi-step writes, external calls, side effects after commit (audit, jobs),
+   returning a Result.
 3. **Spec it**: cover the happy path and every `Failure` branch (`:not_ready`,
    `:forbidden`, `:validation`, …). Every behavior gets a test.
 4. **THEN call it** from the controller/route and match the Result.
@@ -247,8 +246,8 @@ or a worker.
 Use Rails'
 [`ActiveSupport::CurrentAttributes`](https://api.rubyonrails.org/classes/ActiveSupport/CurrentAttributes.html)
 for request context — `Current.account`, `Current.user`, `Current.request_id`.
-Set it once in a `before_action` (Rails) or `before` filter (Sinatra); reset per
-request (Rails resets `Current` automatically between requests).
+Set it once in a `before_action`; reset per request (Rails resets `Current`
+automatically between requests).
 
 ```ruby
 class Current < ActiveSupport::CurrentAttributes
@@ -282,33 +281,6 @@ returning `Failure([:forbidden])` when denied.
 
 ---
 
-## Sinatra specifics
-
-- Route blocks in `app.rb` / `routes/*.rb` stay thin: parse `params`, call one
-  service in `lib/my_app/**`, match the Result, set status/body.
-- **No ActiveRecord in a route block.** Domain logic lives in `lib/my_app/`,
-  the same service objects a Rails app would use.
-- Cross-cutting concerns (auth, request id, logging, rate limiting) belong in
-  **Rack middleware**, not repeated in route blocks
-  ([Sinatra README — Rack middleware](https://sinatrarb.com/intro.html#rack-middleware)).
-- `Current` works the same via `ActiveSupport::CurrentAttributes`; set it in a
-  `before` filter and reset it in an `after` filter (Sinatra has no automatic
-  per-request reset).
-
-```ruby
-# ✅ Sinatra route stays an adapter
-post "/posts" do
-  result = MyApp::Posts::Create.call(account: Current.account, actor: Current.user, attrs: params[:post])
-  case result.to_tuple
-  in [:ok, post]               then status 201; json post
-  in [:error, :validation, e]  then status 422; json(errors: e)
-  in [:error, :forbidden]      then halt 403
-  end
-end
-```
-
----
-
 ## Patterns for when it gets complex
 
 - **Query objects** (`app/queries/` or `lib/my_app/queries/`): when a read needs
@@ -339,7 +311,7 @@ Before committing changes to any controller action or route block:
 
 ## Related docs
 
-- `architecture-decisions.md` — Result/error tags, audit logging, soft deletes, pagination, event publishing
+- `architecture-decisions.md` — Result/error tags, audit logging, soft deletes, pagination, side effects after commit
 - `external-service-integration.md` — client wrapper pattern for third-party APIs
 - `testing.md` — RSpec/Minitest patterns, factories, mocks, request specs
 - `multi-tenancy.md` — tenant scoping and query patterns (if applicable)

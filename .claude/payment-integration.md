@@ -28,8 +28,7 @@ what makes billing swappable and testable — specs stub `MyApp::Billing::Client
 never `Stripe::Checkout::Session`.
 
 ```ruby
-# app/clients/my_app/billing/client.rb (Rails)
-# lib/my_app/billing/client.rb        (Sinatra)
+# app/clients/my_app/billing/client.rb
 module MyApp
   module Billing
     class Client
@@ -143,8 +142,6 @@ User clicks Subscribe
 The redirect is **not** where you create the subscription — the webhook is. The
 success_url may never be hit (user closes the tab) but the webhook always fires.
 
-**Rails**
-
 ```ruby
 class CheckoutsController < ApplicationController
   def create
@@ -153,18 +150,6 @@ class CheckoutsController < ApplicationController
     in Success(session) then redirect_to(session.url, allow_other_host: true)
     in Failure([:external_service_error, _]) then redirect_to plans_path, alert: "Could not start checkout."
     end
-  end
-end
-```
-
-**Sinatra**
-
-```ruby
-post "/checkout" do
-  result = MyApp::Billing::StartCheckout.call(user: Current.user, plan: plan)
-  case result.to_tuple
-  in [:ok, session] then redirect session.url
-  in [:error, :external_service_error, _] then halt 502, "Could not start checkout."
   end
 end
 ```
@@ -197,7 +182,7 @@ module MyApp
 end
 ```
 
-**Rails** — read `request.raw_post` before param parsing consumes it.
+Read `request.raw_post` before param parsing consumes it.
 
 ```ruby
 class WebhooksController < ActionController::Base
@@ -221,29 +206,11 @@ class WebhooksController < ActionController::Base
 end
 ```
 
-**Sinatra**
-
-```ruby
-post "/webhooks/stripe" do
-  event = MyApp::Billing::Client.construct_event(request.body.read, request.env["HTTP_STRIPE_SIGNATURE"])
-  halt 400 if event.nil?
-
-  MyApp::Billing::WebhookJob.perform_async(
-    "stripe_event_id" => event.id,
-    "account_id"      => event.data.object.metadata["account_id"],
-    "event_type"      => event.type,
-    "payload"         => event.data.object.to_hash
-  )
-  status 200
-end
-```
-
 ### Async via background job
 
-| Framework | Job runner | Enqueue |
-|---|---|---|
-| **Rails 8** | ActiveJob on Solid Queue (default) | `perform_later` |
-| **Sinatra** | Sidekiq `~> 7` <span title="stable">`[stable]`</span> | `perform_async` |
+| Job runner | Enqueue |
+|---|---|
+| ActiveJob on Solid Queue (default) | `perform_later` |
 
 ### Key events
 
@@ -266,7 +233,7 @@ add_index :webhook_events, %i[provider_event_id account_id], unique: true
 ```
 
 ```ruby
-class MyApp::Billing::WebhookJob < ApplicationJob   # Rails
+class MyApp::Billing::WebhookJob < ApplicationJob
   queue_as :billing
 
   def perform(stripe_event_id:, account_id:, event_type:, payload:)
@@ -287,8 +254,6 @@ class MyApp::Billing::WebhookJob < ApplicationJob   # Rails
 end
 ```
 
-(Sinatra: identical body inside a `Sidekiq::Job`, `sidekiq_options queue: "billing"`.)
-
 ---
 
 ## Subscription Gating
@@ -296,7 +261,7 @@ end
 Reads of `stripe_customer_id` / `stripe_subscription_id` decide access. Gate at
 the request boundary; the rule lives in a policy/service, not inline.
 
-**Rails** — a `before_action` plus a Pundit-adjacent check.
+Use a `before_action` plus a Pundit-adjacent check.
 
 ```ruby
 class ApplicationController < ActionController::Base
@@ -317,14 +282,6 @@ end
 # Pundit policy — authorization logic out of the controller
 class ReportPolicy < ApplicationPolicy
   def index? = user.account.subscription&.active?
-end
-```
-
-**Sinatra** — a `before` filter.
-
-```ruby
-before "/reports*" do
-  halt redirect("/plans") unless Current.account.subscription&.active?
 end
 ```
 

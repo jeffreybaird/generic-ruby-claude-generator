@@ -46,7 +46,7 @@ association, authorization rides the policy, both belong in the service.
 Authentication establishes identity only. It never decides what an identity may
 do — that's authorization (§3).
 
-### Rails — built-in generator (default) <span title="stable">`[stable]`</span>
+### Built-in generator (default) <span title="stable">`[stable]`</span>
 
 Rails 8 ships an authentication generator. Prefer it for new apps; no dependency.
 
@@ -73,7 +73,7 @@ end
 `password_confirmation` and `#authenticate`
 ([ActiveModel::SecurePassword](https://api.rubyonrails.org/classes/ActiveModel/SecurePassword/ClassMethods.html)).
 
-### Rails — Devise (mature alternative) <span title="mature">`[mature]`</span>
+### Devise (mature alternative) <span title="mature">`[mature]`</span>
 
 Reach for Devise when you need confirmable/recoverable/lockable/OmniAuth out of
 the box. Heavier; pin `~> 4.9` (the line that supports Rails 8)
@@ -82,33 +82,6 @@ the box. Heavier; pin `~> 4.9` (the line that supports Rails 8)
 ```ruby
 gem "devise", "~> 4.9"   # mature; brings its own controllers/routes
 ```
-
-### Sinatra <span title="stable">`[stable]`</span>
-
-No generator. Use `bcrypt` + `has_secure_password` on an ActiveRecord `User` and
-roll sessions via `Rack::Session::Cookie`, or adopt Warden middleware.
-
-```ruby
-# bcrypt + sessions (minimal)
-gem "bcrypt", "~> 3.1"
-
-post "/login" do
-  user = User.find_by(email_address: params[:email].to_s.downcase)
-  if user&.authenticate(params[:password])    # has_secure_password
-    session[:user_id] = user.id
-    redirect "/"
-  else
-    halt 401, "Invalid credentials"
-  end
-end
-```
-
-- `warden` <span title="mature">`[mature]`</span> — Rack auth framework, strategy-based
-  ([warden](https://github.com/wardencommunity/warden)).
-- `sinatra-authentication` / hand-rolled bcrypt <span title="stable">`[stable]`</span> for simple apps.
-
-Authentication is **Rack middleware / a `before` filter**, not logic repeated in
-each route (see `separation-of-concerns.md`).
 
 ---
 
@@ -301,29 +274,6 @@ end
 <%# ❌ %>      <%= link_to "Edit", edit_post_path(@post) if Current.membership.role == "admin" %>
 ```
 
-**Sinatra** has no Pundit controller integration — call policies manually or via
-a `before` filter:
-
-```ruby
-helpers do
-  def authorize!(record, query)
-    policy = Pundit::PolicyFinder.new(record).policy.new(Current.user, record)
-    halt 403 unless policy.public_send(query)
-  end
-end
-
-put "/posts/:id" do
-  result = MyApp::Posts::Update.call(actor: Current.user, account: Current.account,
-                                     post_id: params[:id], attrs: params[:post])
-  case result.to_tuple
-  in [:ok, post]            then json post
-  in [:error, :forbidden]   then halt 403
-  in [:error, :not_found]   then halt 404
-  in [:error, :validation, e] then status 422; json(errors: e)
-  end
-end
-```
-
 ---
 
 ## 5. Super admin — bypass scope only in an Admin namespace
@@ -444,7 +394,6 @@ branch in the service gets a test.
 | `devise` | `~> 4.9` | <span title="mature">`[mature]`</span> | Authentication (alt to the generator) |
 | `rolify` | `~> 6.0` | <span title="mature">`[mature]`</span> | Dynamic/resource-scoped roles |
 | `bcrypt` | `~> 3.1` | <span title="stable">`[stable]`</span> | Password hashing (`has_secure_password`) |
-| `warden` | latest | <span title="mature">`[mature]`</span> | Sinatra/Rack auth middleware |
 
 The Rails 8 auth generator needs **no gem** beyond `bcrypt`.
 

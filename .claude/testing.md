@@ -1,8 +1,7 @@
 # Testing
 
 Load this file when writing tests, setting up test infrastructure, or reviewing
-test coverage. Generic Ruby template covering **Rails 8** and **Sinatra 4** —
-sections split by framework where mechanics differ.
+test coverage. Generic Ruby template for **Rails 8**.
 
 > **Baseline:** Ruby 3.3+ · RSpec (community default; Minitest is Rails' default) · FactoryBot · Capybara (system/E2E) · WebMock/VCR (HTTP) · data-testid selectors.
 
@@ -75,34 +74,6 @@ Mirrors RSpec's directory conventions ([rspec.info](https://rspec.info/),
 `ActionDispatch::IntegrationTest` / `ActionDispatch::SystemTestCase`. See the
 [Rails testing guide](https://guides.rubyonrails.org/testing.html).
 
-### Sinatra (RSpec) — `[stable]`
-
-Sinatra has no generators, no ActiveJob, no fixtures conventions. Use the same
-RSpec tree, but:
-
-```
-spec/
-├── models/          # if using ActiveRecord/Sequel — validations, scopes
-├── services/        # plain Ruby service objects
-├── requests/        # Rack::Test specs (get/post/last_response) — NOT ActionDispatch
-├── system/          # Capybara, with Capybara.app = MyApp::App
-├── jobs/            # Sidekiq worker specs (no ActiveJob)
-├── factories/
-└── support/
-```
-
-Request specs in Sinatra drive the app through
-[`Rack::Test`](https://github.com/rack/rack-test) — `[stable]` — not Rails'
-integration test stack. Same directory, different mechanism.
-
-```ruby
-# spec/support/rack_test.rb
-RSpec.configure do |config|
-  config.include Rack::Test::Methods, type: :request
-  def app = MyApp::App   # the Sinatra app under test
-end
-```
-
 ---
 
 ## 3. Default Tool Ladder
@@ -115,8 +86,7 @@ slow and flaky compared to request specs.
 |-------------------------------------------------------|-------------------------------|------------|
 | Model validation / scope / association                | model spec                    | [stable]   |
 | Business logic, authorization, tenant isolation       | service spec (unit)           | [stable]   |
-| One route, full stack, no JS (Rails)                  | request spec (ActionDispatch) | [stable]   |
-| One route, full stack, no JS (Sinatra)                | request spec (`Rack::Test`)   | [stable]   |
+| One route, full stack, no JS                          | request spec (ActionDispatch) | [stable]   |
 | Multi-page flow, server-rendered, no JS               | request spec (chain requests) | [stable]   |
 | JS / Turbo / Stimulus interaction, real browser       | system spec (Capybara `:js`)  | [active]   |
 | CSS / visual rendering verification                   | system spec (Capybara `:js`)  | [active]   |
@@ -135,8 +105,6 @@ to switch to Selenium/Cuprite, and **exclude `:js` from the fast dev run**:
 ```ruby
 # spec/support/capybara.rb
 Capybara.javascript_driver = :selenium_chrome_headless
-# Sinatra only — Rails wires this automatically:
-# Capybara.app = MyApp::App
 ```
 
 Capybara: [github.com/teamcapybara/capybara](https://github.com/teamcapybara/capybara) — `[stable]`.
@@ -301,7 +269,6 @@ payload or missing record returns/raises as designed.
 `rspec-rails` provides the matchers; under the hood they wrap
 `ActiveJob::TestHelper`. See the
 [Rails job testing guide](https://guides.rubyonrails.org/testing.html#testing-jobs).
-**Rails-only — these matchers do not exist in Sinatra.**
 
 ```ruby
 # Assert enqueue (does not run the job):
@@ -320,9 +287,9 @@ expect(post.reload).to be_published
 Minitest equivalent: `assert_enqueued_jobs`, `assert_enqueued_with`,
 `perform_enqueued_jobs` from `ActiveJob::TestHelper`.
 
-### Sidekiq (Rails or Sinatra) — `[stable]`
+### Sidekiq — `[stable]`
 
-Framework-agnostic path; the only job option for Sinatra. Use
+Framework-agnostic path. Use
 [`Sidekiq::Testing`](https://github.com/sidekiq/sidekiq/wiki/Testing).
 
 | Mode                      | Behavior                                              | Use for                          |
@@ -361,7 +328,7 @@ end
 For every new feature, ALL applicable categories below are required before it is
 considered complete.
 
-### Models (Rails) / data objects
+### Models / data objects
 - Valid attrs → valid
 - Missing required fields → invalid with the expected error
 - Invalid values → invalid
@@ -433,16 +400,14 @@ bundle exec erb_lint --lint-all # ERB lint (optional)
 
 | Gate          | Gem / tool                                                              | Scope            | Maturity   |
 |---------------|-------------------------------------------------------------------------|------------------|------------|
-| Tests         | [rspec](https://rspec.info/) `~> 3.13` (or Minitest)                    | Rails + Sinatra  | [stable]   |
-| Lint/style    | [rubocop](https://github.com/rubocop/rubocop) `~> 1.65`                 | Rails + Sinatra  | [stable]   |
-| Security scan | [brakeman](https://brakemanscanner.org/) `~> 6.1`                       | **Rails only**   | [stable]   |
-| CVE audit     | [bundler-audit](https://github.com/rubysec/bundler-audit) `~> 0.9`      | Rails + Sinatra  | [stable]   |
+| Tests         | [rspec](https://rspec.info/) `~> 3.13` (or Minitest)                    | Rails            | [stable]   |
+| Lint/style    | [rubocop](https://github.com/rubocop/rubocop) `~> 1.65`                 | Rails            | [stable]   |
+| Security scan | [brakeman](https://brakemanscanner.org/) `~> 6.1`                       | Rails            | [stable]   |
+| CVE audit     | [bundler-audit](https://github.com/rubysec/bundler-audit) `~> 0.9`      | Rails            | [stable]   |
 | ERB lint      | [erb_lint](https://github.com/Shopify/erb_lint) `~> 0.5`                | template-based   | [optional] |
 
 Notes:
-- **Brakeman** is Rails-aware (it understands Rails routing/views) and adds
-  little on a pure Sinatra app — there `bundler-audit` plus RuboCop carry the
-  security load.
+- **Brakeman** is Rails-aware (it understands Rails routing/views).
 - **Minitest** apps swap the first row for `bin/rails test` /
   `bin/rails test:system`; the remaining gates are identical.
 - Run the suite, lint, security, and CVE gates green before any deploy. `main`

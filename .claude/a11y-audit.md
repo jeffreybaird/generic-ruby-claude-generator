@@ -4,7 +4,7 @@ description: Audit UI changes for WCAG 2.1 AA accessibility compliance and fix a
 
 # Accessibility Audit
 
-> **Baseline:** Rails 8 (ERB/ViewComponent, Hotwire) / Sinatra 4 (ERB) · WCAG 2.1 AA. Framework-agnostic HTML rules; framework notes call out `button_to`/`link_to`, `form.label`, and Turbo Stream `aria-live`.
+> **Baseline:** Rails 8 (ERB/ViewComponent, Hotwire) · WCAG 2.1 AA. HTML rules with Rails notes that call out `button_to`/`link_to`, `form.label`, and Turbo Stream `aria-live`.
 
 Every UI addition or modification in `MyApp` MUST fully comply with WCAG 2.1 AA. This is
 not optional — accessibility violations are bugs.
@@ -14,17 +14,16 @@ violation found, **fix it directly** — do not just report it. Then list a summ
 
 $ARGUMENTS
 
-This checklist is **framework-agnostic** (ERB / HTML output) and applies whether the app
-runs on Rails 8 or Sinatra 4. Framework-specific notes call out Rails helpers and Hotwire.
+This checklist covers ERB / HTML output for Rails 8, with notes that call out Rails helpers
+and Hotwire.
 
 Authoritative source: WCAG 2.1 — <https://www.w3.org/WAI/WCAG21/quickref/>.
 
 ## What to Audit
 
 Every template, partial, ViewComponent, layout, CSS rule, and Stimulus controller that
-touches rendered HTML. For Rails, that means files under `app/views/`, `app/components/`,
-`app/javascript/controllers/`, and `app/assets/stylesheets/`. For Sinatra, `views/` and
-`public/`.
+touches rendered HTML — files under `app/views/`, `app/components/`,
+`app/javascript/controllers/`, and `app/assets/stylesheets/`.
 
 ## Requirements
 

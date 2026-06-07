@@ -1,29 +1,26 @@
-# CLAUDE.md — Generic Ruby Project (Rails 8 / Sinatra 4)
+# CLAUDE.md — Generic Ruby Project (Rails 8)
 
 Claude Code reads this every session. Follow all rules unless the user overrides for a
 specific task. This is a **generic template** — replace `MyApp` / `my_app` with your real
 module and gem/app names, and adapt the example domain (contexts, models, services) to
-yours. It targets **two frameworks**; obey the rules for whichever the project uses.
+yours.
 
 Detail patterns live in `.claude/`. Load the relevant file when working in that area.
 
 ### Stack Baseline
 
 Ruby 3.3+ · **Rails 8.0** (Hotwire/Turbo + Stimulus, Propshaft, importmap, Solid
-Queue/Cache/Cable, Kamal 2, Tailwind) **or Sinatra 4** (Rack, Puma) · PostgreSQL. Key
-conventions: domain logic in **service objects returning Result types** (dry-monads), not
-controllers; request context via **`Current` attributes** (`Current.user` / `Current.account`)
-— the data boundary, *not* authorization; **Pundit** for authorization; **Faraday** for
-HTTP; background work on **Solid Queue / Sidekiq**; **RSpec + FactoryBot + Capybara** for
-tests.
+Queue/Cache/Cable, Kamal 2, Tailwind) · PostgreSQL. Key conventions: domain logic in
+**service objects returning Result types** (dry-monads), not controllers; request context via
+**`Current` attributes** (`Current.user` / `Current.account`) — the data boundary, *not*
+authorization; **Pundit** for authorization; **Faraday** for HTTP; background work on
+**Solid Queue / Sidekiq**; **RSpec + FactoryBot + Capybara** for tests.
 
-> **Rails vs Sinatra:** Rails is batteries-included — lean on its generators, conventions,
-> and Rails 8 defaults. Sinatra is minimal Rack — you assemble the pieces (ActiveRecord or
-> Sequel, a job runner, a router); the *principles* below are identical, the wiring differs.
+Lean on Rails' generators, conventions, and Rails 8 defaults.
 
 ### Core (apply to any Ruby web app)
 
-- `.claude/architecture-decisions.md` — Result/error objects, audit logging, soft deletes, pagination, events, feature flags, idempotency
+- `.claude/architecture-decisions.md` — Result/error objects, audit logging, soft deletes, pagination, side effects, feature flags, idempotency
 - `.claude/separation-of-concerns.md` — what belongs in a controller/route, a service object, a model, a view
 - `.claude/testing.md` — test-as-contract rule, FactoryBot, WebMock/VCR, `data-testid` selectors, system specs
 - `.claude/observability.md` — OpenTelemetry, ActiveSupport::Notifications, structured logging
@@ -47,14 +44,14 @@ tests.
 
 ## Project Overview
 
-`MyApp` is a Ruby web application (Rails 8 or Sinatra 4). Replace this section with your
-own overview: what the app does, who uses it, and the high-level architecture.
+`MyApp` is a Rails 8 web application. Replace this section with your own overview: what the
+app does, who uses it, and the high-level architecture.
 
 ### Architecture Summary
 
 - **Interfaces:** typically an internal/admin UI and a public/end-user UI. Adapt to your app.
-- **Domain logic:** service objects (`app/services` in Rails, `lib/my_app/**` in Sinatra)
-  that return Result types; models hold persistence and invariants.
+- **Domain logic:** service objects (`app/services`) that return Result types; models hold
+  persistence and invariants.
 - **Background jobs:** Solid Queue (Rails 8 default) or Sidekiq, queues split by criticality.
 - **External services:** wrapped behind client classes (see
   `.claude/external-service-integration.md`). Never call a vendor SDK directly outside its client.
@@ -96,14 +93,16 @@ transaction requires it. Replicas then become a config change, not a rewrite.
 ### 3. Cache Frequently-Read, Infrequently-Written Data
 
 Hot, rarely-changing data (config, metadata, lookups) goes through `Rails.cache` (Solid
-Cache / Redis / Memcached). Invalidate via the event system — a mutation publishes an event
-whose subscriber clears the cache.
+Cache / Redis / Memcached). Invalidate on write — the service that mutates the data (or an
+`after_commit` callback on the model) busts the cache key once the change commits.
 
-### 4. Keep the Client Lean; Prefer Server-Rendered Hotwire
+### 4. Keep the Client Lean
 
-Prefer Turbo (server-rendered HTML over the wire) and small Stimulus controllers over an
-SPA. Keep payloads and partials lean; avoid N+1 (`includes`); never load entire association
-trees. Reserve Action Cable for genuinely realtime features.
+This template defaults to Turbo (server-rendered HTML over the wire) with small Stimulus
+controllers, and that's the path to reach for first. An SPA is a legitimate choice when a UI
+genuinely needs rich client-side state — pick the tool that fits the screen. Either way, keep
+the client thin: lean payloads and partials, avoid N+1 (`includes`), don't ship entire
+association trees to the view. Reserve Action Cable for genuinely realtime features.
 
 ### 5. Broadcast Only What Multiple Processes Need
 
@@ -117,28 +116,21 @@ Job queues by criticality: `critical` (payments), `default` (webhooks, notificat
 `bulk` (analytics, exports). High-volume work never shares a queue with payments. Every job
 carries its account/scope id in arguments.
 
-### 7. Emit Events, Don't Inline Side Effects
-
-Service objects publish events via `ActiveSupport::Notifications`. Side effects (audit log,
-webhook dispatch, analytics, notifications, cache invalidation) are handled by subscribers
-that enqueue jobs — not inline. A new side effect is a new subscriber, not a change to
-existing code.
-
-### 8. Instrument Everything
+### 7. Instrument Everything
 
 Use OpenTelemetry auto-instrumentation for HTTP/DB/jobs; add manual spans for multi-step
 business logic and external calls. Emit a metric on every business-significant event via
 `ActiveSupport::Notifications`. Every log line is structured (lograge/semantic_logger) with
 `request_id`, `trace_id`, and account/user ids.
 
-### 9. Isolate Workloads (especially if multi-tenant)
+### 8. Isolate Workloads (especially if multi-tenant)
 
 Queries indexed and paginated. Background jobs queue-separated. Cache keys namespaced. Rate
 limiting per-actor (Rack::Attack). If multi-tenant: one account's bulk work must never
 starve another's, and a misconfigured tenant must not slow others' requests. See
 `.claude/multi-tenancy.md`.
 
-### 10. Design Interfaces for Tomorrow, Implement for Today
+### 9. Design Interfaces for Tomorrow, Implement for Today
 
 Wrap external services behind client classes so implementations swap without touching
 callers. Consistent Result types so a future API layer maps cleanly to HTTP. Pagination
@@ -153,18 +145,24 @@ gate by plan tier or rollout.
 
 ### Single Responsibility — One Object, One Job
 
-Each service object does one thing and exposes a single `call`. If you write "and" in its
+A service object does one thing and exposes a single `call`. If you write "and" in its
 description, split it.
 
-### Domain Logic Lives in Service Objects and Models
+### Keep Domain Logic Out of Controllers and Routes
 
-Skinny controllers/routes: parse params, call **one** service object, pattern-match the
-Result, render or redirect. No business rules, raw queries, multi-step orchestration, or
-external API calls in controllers/routes. See `.claude/separation-of-concerns.md`.
+Skinny controllers/routes: parse params, invoke the domain layer, hand the outcome to the
+view. No business rules, raw queries, multi-step orchestration, or external API calls in
+controllers/routes. *Where* that domain logic lives is a judgment call: lean on plain Rails
+conventions (a model method, a scope, a controller-coordinated `update`) for simple CRUD, and
+reach for a service object when an operation spans multiple models, has real side effects, or
+needs to be callable from more than one entry point (web, API, job, CLI). Don't manufacture a
+one-line service for a trivial save. See `.claude/separation-of-concerns.md`.
 
-### Result Types, Not Exceptions for Control Flow
+### Make Expected Failures Explicit, Not Exceptions
 
-Fallible service objects return explicit, serializable Results (dry-monads):
+Expected, recoverable outcomes (not found, invalid input, over a plan limit) should be values
+the caller can branch on, not exceptions raised for control flow. This template's default is a
+tagged Result (`dry-monads`):
 
 ```ruby
 Success(resource)
@@ -176,9 +174,13 @@ Failure([:plan_limit_reached, { limit:, current: }])
 Failure([:conflict])
 ```
 
-Reserve `raise` for genuinely exceptional conditions. Never return bare booleans or `nil`
-for expected failure paths; never leak raw exception strings from a service. See
-`.claude/architecture-decisions.md` for the full taxonomy.
+Tagged Results pay off most when an operation has several distinct failure modes or a future
+API must map them to HTTP. For simpler cases, idiomatic Rails alternatives are fine —
+`model.save` returning false with `model.errors`, or raising and rescuing a domain exception
+at the boundary. Whatever you pick, be consistent within a context, don't return a bare
+boolean/`nil` where the caller needs to know *why* it failed, and never leak a raw exception
+string out of the domain layer as the error. See `.claude/architecture-decisions.md` for the
+full taxonomy.
 
 ### Request Context via `Current`, Scoped in Services
 
@@ -198,9 +200,9 @@ a paginated result (Pagy). See `.claude/architecture-decisions.md`.
 
 ### Audit Every Mutation
 
-Every create, update, and delete is recorded via the event system + a subscriber (or
-`audited`/`paper_trail`): who, when, what changed, from which IP — including impersonation
-context where applicable.
+Every create, update, and delete is recorded — the service writes an audit row after the
+mutation commits, or a gem (`audited`/`paper_trail`) captures it: who, when, what changed,
+from which IP — including impersonation context where applicable.
 
 ### Authorization Is Separate from Scoping and Authentication
 
@@ -274,7 +276,7 @@ changes and "WIP"/"misc" commits.
 
 ### Code
 - No business logic or raw queries in controllers/routes — use service objects and model scopes
-- No service object that returns bare booleans/`nil` for expected failures — return a Result
+- No domain method returning a bare boolean/`nil` where the caller must know *why* it failed — surface the reason (a tagged Result, `model.errors`, or a domain exception)
 - No `raise` for ordinary control flow — reserve exceptions for the exceptional
 - No service or query that ignores `Current.account` when scopes are configured (multi-tenant)
 - No untested branch — every conditional arm needs a spec

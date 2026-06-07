@@ -5,7 +5,7 @@ wiring CI/CD, or changing how secrets and migrations are handled. Host-agnostic:
 examples use **Kamal 2** (the Rails 8 default), the way the old Elixir template
 used Fly + mix releases. Swap in any host that runs Docker.
 
-> **Baseline:** Ruby 3.3+ · Rails 8 deploys with Kamal 2 (default) + Docker · Sinatra runs under Puma + Docker/Kamal · PostgreSQL · secrets via env / Rails encrypted credentials.
+> **Baseline:** Ruby 3.3+ · Rails 8 deploys with Kamal 2 (default) + Docker · PostgreSQL · secrets via env / Rails encrypted credentials.
 
 ---
 
@@ -29,14 +29,14 @@ used Fly + mix releases. Swap in any host that runs Docker.
 
 ## 1. Secrets — never in source
 
-| Concern | Rails | Sinatra |
-|---|---|---|
-| App secrets at runtime | Encrypted credentials (`config/credentials.yml.enc` decrypted with `RAILS_MASTER_KEY`) and/or plain ENV | ENV only |
-| Dev convenience | `dotenv-rails` loads `.env` in dev/test **only** | `dotenv` loads `.env` in dev |
-| Committed? | `credentials.yml.enc` yes (encrypted); `master.key` / `.env` **never** | `.env` **never** |
-| Production source | env injected by the host (Kamal secrets, platform env) | same |
+| Concern | Rails |
+|---|---|
+| App secrets at runtime | Encrypted credentials (`config/credentials.yml.enc` decrypted with `RAILS_MASTER_KEY`) and/or plain ENV |
+| Dev convenience | `dotenv-rails` loads `.env` in dev/test **only** |
+| Committed? | `credentials.yml.enc` yes (encrypted); `master.key` / `.env` **never** |
+| Production source | env injected by the host (Kamal secrets, platform env) |
 
-**Rails — encrypted credentials** <span title="stable">`[stable]`</span>
+**Encrypted credentials** <span title="stable">`[stable]`</span>
 
 ```bash
 bin/rails credentials:edit            # opens decrypted YAML in $EDITOR
@@ -49,18 +49,7 @@ Rails.application.credentials.dig(:stripe, :secret_key)
 (`credentials/production.yml.enc` + `production.key`) keep prod secrets separate
 ([Rails — Custom Credentials](https://guides.rubyonrails.org/security.html#custom-credentials)).
 
-**Sinatra — ENV via dotenv** <span title="stable">`[stable]`</span>
-
-```ruby
-require "dotenv/load" if ENV["RACK_ENV"] != "production"  # dev/test only
-DB_URL = ENV.fetch("DATABASE_URL")                        # fail fast if missing
-```
-
-Always `ENV.fetch` (raises on missing) for required secrets, never `ENV[]`
-(returns `nil` silently). Add `.env` to `.gitignore`; ship a committed
-`.env.example` with keys but no values.
-
-**Both:** in CI/host, secrets arrive as env. With Kamal, declare them under
+In CI/host, secrets arrive as env. With Kamal, declare them under
 `env.secret` and source from `.kamal/secrets` (which itself pulls from a vault /
 1Password / CI secrets, never literals)
 ([Kamal — Environment variables](https://kamal-deploy.org/)).
@@ -89,8 +78,6 @@ deploy. Two correct hook points; use one, not both:
   concurrent migration races. The entrypoint-on-every-boot pattern is fine for a
   single web container; gate it for clusters.
 
-**Rails**
-
 ```ruby
 # bin/docker-entrypoint  (shipped by Rails 8)
 if [ "${@: -1:1}" = "./bin/rails" ] && [ "${@: -1}" = "server" ]; then
@@ -98,24 +85,6 @@ if [ "${@: -1:1}" = "./bin/rails" ] && [ "${@: -1}" = "server" ]; then
 fi
 exec "${@}"
 ```
-
-**Sinatra** <span title="stable">`[stable]`</span> — no Rails CLI; wire ActiveRecord
-or Sequel migrations into a rake task and run it in the same release step.
-
-```ruby
-# Rakefile  — ActiveRecord via standalone_migrations
-require "standalone_migrations"
-StandaloneMigrations::Tasks.load_tasks   # gives db:migrate, db:create, ...
-# Sequel alternative: Sequel.extension(:migration); Sequel::Migrator.run(DB, "db/migrate")
-```
-
-```bash
-# release step (entrypoint or Kamal pre-deploy hook)
-bundle exec rake db:migrate
-```
-
-`standalone_migrations` adds Rails-style migration rake tasks to a non-Rails app
-([thuss/standalone-migrations](https://github.com/thuss/standalone-migrations)).
 
 ---
 
@@ -177,48 +146,19 @@ accessories:
 | `kamal app exec '<cmd>'` | run a one-off (`bin/rails db:migrate`, console) on a host |
 | `kamal rollback` | revert to the previous image |
 
-**Sinatra under Kamal** works identically — Kamal only needs a Docker image with
-a health endpoint. Point `proxy.healthcheck.path` at your Sinatra `/up` (§6) and
-set the release migration step in `.kamal/hooks/pre-deploy`.
-
 ---
 
 ## 4. Docker
 
-| | Rails 8 | Sinatra 4 |
-|---|---|---|
-| Dockerfile | **shipped** by `rails new` (multi-stage, prod-optimized) | **hand-written** |
-| Entrypoint | `bin/docker-entrypoint` (runs `db:prepare`) | write your own |
-| Asset build | `assets:precompile` in build stage | build only if you serve assets |
+| | Rails 8 |
+|---|---|
+| Dockerfile | **shipped** by `rails new` (multi-stage, prod-optimized) |
+| Entrypoint | `bin/docker-entrypoint` (runs `db:prepare`) |
+| Asset build | `assets:precompile` in build stage |
 
-**Rails** — the generated Dockerfile already does multi-stage build, drops to a
+The generated Dockerfile already does multi-stage build, drops to a
 non-root user, precompiles assets, and sets the entrypoint. Don't hand-roll one;
 edit the generated file.
-
-**Sinatra** <span title="stable">`[stable]`</span> — minimal production image:
-
-```dockerfile
-FROM ruby:3.3-slim AS build
-WORKDIR /app
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-      build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
-COPY Gemfile Gemfile.lock ./
-RUN bundle config set --local without 'development test' \
- && bundle install --jobs 4 && bundle clean --force
-COPY . .
-
-FROM ruby:3.3-slim
-WORKDIR /app
-RUN apt-get update -qq && apt-get install -y --no-install-recommends libpq5 \
- && rm -rf /var/lib/apt/lists/* \
- && useradd --create-home app
-COPY --from=build /usr/local/bundle /usr/local/bundle
-COPY --from=build /app /app
-USER app
-ENV RACK_ENV=production
-EXPOSE 3000
-CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]
-```
 
 Run migrations via the release step (§2), not in `CMD`, so replicas don't race.
 
@@ -226,12 +166,12 @@ Run migrations via the release step (§2), not in `CMD`, so replicas don't race.
 
 ## 5. Puma config (`config/puma.rb`)
 
-Puma is the production app server for both frameworks. Tune **workers**
+Puma is the production app server. Tune **workers**
 (processes, CPU parallelism) × **threads** (per-process concurrency, I/O)
 ([puma/puma](https://github.com/puma/puma)).
 
 ```ruby
-# config/puma.rb  — works for Rails and Sinatra
+# config/puma.rb
 max_threads = Integer(ENV.fetch("RAILS_MAX_THREADS", 5))
 min_threads = Integer(ENV.fetch("RAILS_MIN_THREADS", max_threads))
 threads min_threads, max_threads
@@ -254,8 +194,7 @@ end
 | `preload_app!` | — | on, so workers share booted memory (needed for phased restart) |
 
 **DB pool must cover threads:** the pool (`RAILS_MAX_THREADS` in `database.yml`)
-≥ `max_threads`, or threads block waiting for connections. Sinatra: set the
-ActiveRecord/Sequel pool to the same value.
+≥ `max_threads`, or threads block waiting for connections.
 
 ---
 
@@ -264,7 +203,7 @@ ActiveRecord/Sequel pool to the same value.
 The proxy/orchestrator polls a cheap endpoint to decide a container is live.
 **Exempt it from auth and `force_ssl`/redirects** so a plain HTTP probe gets 200.
 
-**Rails** <span title="stable">`[stable]`</span> — ships `/up` served by
+Rails ships `/up` served by
 `Rails::HealthController#show` (200 if the app booted)
 ([Rails — Health Check](https://guides.rubyonrails.org/configuring.html#configuring-health-check)).
 
@@ -274,22 +213,7 @@ get "up" => "rails/health#show", as: :rails_health_check
 ```
 
 The default `/up` checks boot only, not the DB. If you want a DB-touching probe,
-add a custom controller — but keep it fast and unauthenticated.
-
-**Sinatra** — add a lightweight route:
-
-```ruby
-get "/up" do
-  ActiveRecord::Base.connection.verify!   # or DB.test_connection for Sequel
-  status 200
-  "ok"
-rescue StandardError
-  status 503
-  "unhealthy"
-end
-```
-
-Place `/up` **above** any auth `before` filter, or skip auth for that path. Point
+add a custom controller — but keep it fast and unauthenticated. Point
 `proxy.healthcheck.path` (Kamal, §3) at it.
 
 ---
@@ -320,9 +244,7 @@ Prefer a **separate worker process** in production so a slow job never starves
 web request threads (CLAUDE.md: separate background jobs by criticality).
 
 **Sidekiq alternative** needs a Redis accessory (§3) and its own worker
-container/role running `bundle exec sidekiq`. **Sinatra**: Solid Queue and
-Sidekiq both work standalone — wire ActiveJob or call Sidekiq directly; run the
-worker as its own process.
+container/role running `bundle exec sidekiq`.
 
 ---
 
@@ -353,7 +275,7 @@ jobs:
       - run: bundle exec rubocop
       - run: bundle exec brakeman --no-pager      # Rails; security scan
       - run: bundle exec bundler-audit check --update
-      - run: bin/rails db:prepare                 # Sinatra: bundle exec rake db:prepare
+      - run: bin/rails db:prepare
       - run: bundle exec rspec
 
   deploy:
@@ -372,8 +294,6 @@ jobs:
 ```
 
 - **No deploy without the test gate** — `needs: test` is mandatory.
-- Brakeman is Rails-aware; for Sinatra drop it and keep rubocop +
-  bundler-audit (and ruby_audit for the runtime if desired).
 - Assets: precompile in the **image build** (Rails Dockerfile already does) and
   drop the CI step, or precompile in CI — not both.
 
@@ -382,7 +302,7 @@ jobs:
 ## 9. Clustering & scaling
 
 | Concern | Rule |
-|---|---|
+| --- | --- |
 | Vertical | more Puma `workers` × `threads` per container (§5), bounded by RAM/CPU and DB pool |
 | Horizontal | more containers / `servers` hosts in `deploy.yml` (§3) behind the proxy |
 | Sessions | keep **stateless** (signed cookie or DB/Redis store). Add sticky sessions **only** if you truly hold per-connection server state |

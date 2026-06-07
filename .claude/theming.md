@@ -6,7 +6,7 @@ Load this file when working on visual customization, template/layout selection, 
 
 See also: `design-system.md` for token conventions, `multi-tenancy.md` for per-tenant data scoping.
 
-> **Baseline:** Tailwind CSS (tailwindcss-rails on Rails, standalone CLI on Sinatra) · CSS custom properties for tokens · ViewComponent (Rails) for reusable components · ERB templates. Tokens are CSS variables — overridable per tenant.
+> **Baseline:** Tailwind CSS (tailwindcss-rails) · CSS custom properties for tokens · ViewComponent for reusable components · ERB templates. Tokens are CSS variables — overridable per tenant.
 
 **Maturity tags:** **[core]** apply to every project · **[recommended]** strong default, skip only with reason · **[optional]** include only if the app needs it (e.g. multi-tenant / multi-brand).
 
@@ -37,8 +37,6 @@ Tailwind layout utilities (flex, grid, spacing, breakpoints) are fine. The varia
 
 For multi-tenant apps, render an inline `<style>` `:root` block in the layout from the tenant's stored `Theme`. Inline injection means **zero latency** — styles apply on first paint, no extra request, no flash of unbranded content.
 
-### Rails layout
-
 ```erb
 <%# app/views/layouts/application.html.erb %>
 <!DOCTYPE html>
@@ -65,35 +63,6 @@ For multi-tenant apps, render an inline `<style>` `:root` block in the layout fr
 
 Resolve `Current.theme` in a `before_action` from the request's tenant (`Current` attributes per [guides.rubyonrails.org/active_support_core_extensions.html#current-attributes](https://guides.rubyonrails.org/active_support_core_extensions.html)). All values are HTML-escaped by ERB; validate/sanitize color and URL fields on write so the inline block can't be used for injection.
 
-### Sinatra layout
-
-```erb
-<%# views/layout.erb — locals: theme %>
-<html data-theme="<%= theme.base_theme || 'light' %>">
-  <head>
-    <link rel="stylesheet" href="/css/app.css">
-    <style>
-      :root {
-        --accent: <%= theme.brand_primary %>; --surface: <%= theme.surface %>;
-        --text-primary: <%= theme.text_primary %>; --radius: <%= theme.border_radius %>;
-      }
-    </style>
-    <link rel="icon" href="<%= theme.favicon_url %>">
-  </head>
-  <body><%= yield %></body>
-</html>
-```
-
-```ruby
-# Sinatra 4 modular app
-class MyApp < Sinatra::Base
-  before do
-    @theme = Theme.for_host(request.host) || Theme.default
-  end
-  # erb :page, layout: :layout, locals: { theme: @theme }
-end
-```
-
 This composes with the `data-theme` light/dark switch from `design-system.md`: `data-theme` picks the light/dark base, the inline `:root` block re-tints brand tokens on top.
 
 ---
@@ -101,8 +70,6 @@ This composes with the `data-theme` light/dark switch from `design-system.md`: `
 ## Theme schema **[optional]**
 
 Store one row per tenant/brand. The fields map 1:1 to the CSS variables above.
-
-### Rails (Active Record migration)
 
 ```ruby
 create_table :themes do |t|
@@ -137,7 +104,7 @@ create_table :themes do |t|
 end
 ```
 
-Sinatra: the same columns via your ORM of choice (Sequel/ActiveRecord). Validate color fields (hex/oklch) and URL fields on write.
+Validate color fields (hex/oklch) and URL fields on write.
 
 ---
 
@@ -145,13 +112,12 @@ Sinatra: the same columns via your ORM of choice (Sequel/ActiveRecord). Validate
 
 Never store binary file data in Postgres. Store an object-store URL on the theme row.
 
-| Framework | Upload mechanism | Reference |
-|---|---|---|
-| Rails | **Active Storage** → S3 / Tigris / R2 service; persist `logo.url` (or a signed/CDN URL) on the theme | [guides.rubyonrails.org/active_storage_overview.html](https://guides.rubyonrails.org/active_storage_overview.html) |
-| Sinatra | `aws-sdk-s3` direct upload, or **Shrine** with the S3 storage | [shrinerb.com](https://shrinerb.com/), [github.com/aws/aws-sdk-ruby](https://github.com/aws/aws-sdk-ruby) |
+| Upload mechanism | Reference |
+|---|---|
+| **Active Storage** → S3 / Tigris / R2 service; persist `logo.url` (or a signed/CDN URL) on the theme | [guides.rubyonrails.org/active_storage_overview.html](https://guides.rubyonrails.org/active_storage_overview.html) |
 
 ```ruby
-# Rails — app/models/my_app/theme.rb
+# app/models/my_app/theme.rb
 class MyApp::Theme < ApplicationRecord
   has_one_attached :logo
   has_one_attached :favicon
@@ -166,8 +132,6 @@ For an MVP, accepting a hosted URL (admin pastes a link) is fine — wire direct
 ## Layout / template variants — structure only **[optional]**
 
 A stored `template_name` selects a layout/structure variant. Variants control **structure only** — they all consume the same CSS variables, so brand colors/fonts stay consistent across templates.
-
-### Rails
 
 ```ruby
 # app/controllers/concerns/themed_layout.rb
@@ -184,17 +148,6 @@ app/views/layouts/templates/
 ├── default.html.erb
 ├── minimal.html.erb
 └── bold.html.erb        # each is layout structure only; all use the same tokens
-```
-
-### Sinatra
-
-```ruby
-def render_themed(page, theme:)
-  name = theme.template_name || "default"
-  layout_file = settings.views + "/templates/#{name}.erb"
-  layout = File.exist?(layout_file) ? :"templates/#{name}" : :"templates/default"
-  erb page, layout: layout, locals: { theme: theme }
-end
 ```
 
 ### Template rules **[core]**
