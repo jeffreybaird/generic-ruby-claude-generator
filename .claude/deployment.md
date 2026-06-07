@@ -2,8 +2,7 @@
 
 Load this file when configuring deploys, writing a Dockerfile, tuning Puma,
 wiring CI/CD, or changing how secrets and migrations are handled. Host-agnostic:
-examples use **Kamal 2** (the Rails 8 default), the way the old Elixir template
-used Fly + mix releases. Swap in any host that runs Docker.
+examples use **Kamal 2** (the Rails 8 default). Swap in any host that runs Docker.
 
 > **Baseline:** Ruby 3.3+ · Rails 8 deploys with Kamal 2 (default) + Docker · PostgreSQL · secrets via env / Rails encrypted credentials.
 
@@ -91,7 +90,7 @@ exec "${@}"
 ## 3. Kamal 2 (Rails 8 default) <span title="stable">`[stable]`</span>
 
 The host-agnostic deploy tool: build a Docker image, push it, run it on your
-servers with a zero-downtime proxy. The Fly-analog for this template
+servers with a zero-downtime proxy
 ([kamal-deploy.org](https://kamal-deploy.org/)).
 
 ```yaml
@@ -302,7 +301,7 @@ jobs:
 ## 9. Clustering & scaling
 
 | Concern | Rule |
-| --- | --- |
+|---|---|
 | Vertical | more Puma `workers` × `threads` per container (§5), bounded by RAM/CPU and DB pool |
 | Horizontal | more containers / `servers` hosts in `deploy.yml` (§3) behind the proxy |
 | Sessions | keep **stateless** (signed cookie or DB/Redis store). Add sticky sessions **only** if you truly hold per-connection server state |

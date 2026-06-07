@@ -91,7 +91,7 @@ MyApp.config.media_client = ENV["RAILS_ENV"] == "test" ? MyApp::Media::FakeClien
 
 ### Always return tagged Results, never raw HTTP responses
 
-The client maps transport outcomes to the same tagged tuples the rest of the app
+The client maps transport outcomes to the same tagged Results the rest of the app
 uses (see `separation-of-concerns.md` / `architecture-decisions.md`). Callers
 branch on `:not_found`, never on an HTTP status integer.
 

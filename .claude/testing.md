@@ -362,11 +362,10 @@ considered complete.
 - Idempotency (run twice → same result)
 - Error handling (malformed payload, missing record)
 
-### Tenant / per-user isolation — the ported principle
+### Tenant / per-user isolation
 
-The Phoenix source enforced this through a `Scope` struct; Ruby expresses it
-through `current_account` / scoped queries / `acts_as_tenant`. **Drop the struct,
-keep the assertion:** a query scoped to one account must never return another
+Express isolation through `current_account` / scoped queries / `acts_as_tenant`. The
+assertion that matters: a query scoped to one account must never return another
 account's row.
 
 ```ruby

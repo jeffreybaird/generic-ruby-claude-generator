@@ -33,9 +33,9 @@ exceptional (programmer error, unreachable state, infrastructure down).
 
 This template's **default** for surfacing those outcomes is a tagged Result: the
 Result carries a tagged error so the caller knows the failure *kind* without
-inspecting a string. This is the Ruby analog of Elixir's tagged tuples, and it
-prepares the domain layer for a future public API without a rewrite. It earns its
-keep most when an operation has several distinct failure modes.
+inspecting a string, and it prepares the domain layer for a future public API
+without a rewrite. It earns its keep most when an operation has several distinct
+failure modes.
 
 **Tagged Results are not the only idiom**, and for simple cases plain Rails is
 often clearer:

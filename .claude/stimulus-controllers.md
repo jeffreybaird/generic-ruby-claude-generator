@@ -5,8 +5,7 @@ widget integration, or any client-side JavaScript in a Hotwire app.
 
 > **Baseline:** Hotwire (Turbo + Stimulus) on Rails 8 via importmap (default) or jsbundling. Turbo first; Stimulus for client behavior; no business logic in controllers.
 
-This is the Ruby/Hotwire analog of the Elixir template's LiveView JS hooks doc. The
-guiding idea: in a Hotwire app, **client-side code stays a thin DOM/JS bridge — not a
+The guiding idea: in a Hotwire app, **client-side code stays a thin DOM/JS bridge — not a
 home for business logic.** Decisions, data shaping, and authorization belong on the
 server. (Authorization and trust boundaries stay server-side in *any* architecture,
 SPA included — that part isn't Hotwire-specific.)

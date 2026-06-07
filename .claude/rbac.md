@@ -343,7 +343,7 @@ policy(@post).update?                        # in a view
 ## 7. Tests — three axes per protected action
 
 Every protected action gets **three** tests. Authorization bugs hide in the gaps
-between them, so all three are mandatory (this is the ported Phoenix rule).
+between them, so all three are mandatory.
 
 | Axis | Setup | Expect |
 |---|---|---|

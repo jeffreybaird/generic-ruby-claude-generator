@@ -16,11 +16,9 @@ The docs are a **generic template**: they use `MyApp` (module/class) and `my_app
 gem, directory, database) as placeholders and describe patterns, not a specific product.
 You adapt them to your domain, or let the bootstrap script rename everything for you.
 
-> This is the Ruby sibling of a Phoenix/Elixir skill template. The *principles* are the same;
-> the *idioms* are translated to Ruby — ActiveRecord and service objects instead of Ecto and
-> contexts, Hotwire/Stimulus instead of LiveView hooks, Sidekiq/Solid Queue instead of Oban,
-> Pundit instead of hand-rolled role checks, Faraday instead of Req, Kamal instead of mix
-> releases, RSpec/Capybara instead of ExUnit/Wallaby.
+The stack the docs assume: ActiveRecord and service objects, Hotwire/Stimulus,
+Sidekiq/Solid Queue, Pundit for authorization, Faraday for HTTP, Kamal for deploys, and
+RSpec/Capybara for tests.
 
 ---
 
@@ -32,7 +30,7 @@ re-derives conventions on every task and drifts.
 
 This repo encodes those conventions once, where Claude Code reads them automatically
 (`CLAUDE.md` every session; the `.claude/*.md` files on demand for the area in play), so
-that new features land in the right layer with the right Result types, tests, and spans —
+that new features land in the right layer with the right error handling, tests, and spans —
 and so the agent reaches for the *current* idiomatic tool rather than a dated one. The rules
 are concrete enough to apply: decision tables, ✅/❌ anti-pattern pairs, and "when to escalate"
 ladders.
@@ -91,7 +89,10 @@ ladders.
 
 ## Guiding principles
 
-Stated as rules, not suggestions — every feature, service object, and model follows them.
+Most are firm operational rules. A few — where domain logic lives (service object vs. plain
+Rails), how failures are surfaced (tagged Result vs. `model.errors`), and client rendering
+(Hotwire vs. SPA) — are the template's **defaults**, with room for judgment; each doc says
+which is a hard rule and which is a default.
 
 1. **Protect Postgres from the hot path.** High-frequency writes batch through a buffer
    (Redis + `activerecord-import`), never row-by-row.
@@ -111,8 +112,8 @@ Stated as rules, not suggestions — every feature, service object, and model fo
 8. **Isolate workloads** (especially if multi-tenant): indexed/paginated queries, queue
    separation, namespaced cache keys, per-actor rate limiting (Rack::Attack).
 9. **Design interfaces for tomorrow, implement for today.** Client classes so vendors swap
-   without touching callers; consistent Result types; pagination on every list; feature
-   flags to gate rollout.
+   without touching callers; consistent error handling (tagged Results by default); pagination
+   on every list; feature flags to gate rollout.
 
 Cross-cutting disciplines the docs codify:
 
